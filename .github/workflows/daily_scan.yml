@@ -1,0 +1,29 @@
+name: Daily Quant & Market Scan Alerts
+
+on:
+  schedule:
+    # Runs Monday to Friday at 03:45 UTC (9:15 AM IST - Market Open)
+    - cron: '45 3 * * 1-5'
+    # Runs Monday to Friday at 10:00 UTC (3:30 PM IST - Market Close)
+    - cron: '0 10 * * 1-5'
+  workflow_dispatch: # Allows manual trigger anytime from GitHub interface
+
+jobs:
+  run-scanner:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run Market Scanner
+        run: python app.py
