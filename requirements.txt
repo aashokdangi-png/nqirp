@@ -2,7 +2,6 @@ streamlit
 yfinance
 pandas
 numpy
-sqlite3
 requests
 pillow
 plotly
