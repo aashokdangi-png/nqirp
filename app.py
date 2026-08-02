@@ -149,7 +149,6 @@ elif page == "👁️ Vision AI Chart Pattern Scanner":
     if uploaded_file is not None:
         col_img, col_analysis = st.columns([1, 1])
         
-        # Always read fresh bytes to avoid Streamlit caching previous uploads
         uploaded_file.seek(0)
         img_bytes = uploaded_file.read()
         uploaded_file.seek(0)
@@ -162,63 +161,94 @@ elif page == "👁️ Vision AI Chart Pattern Scanner":
             st.subheader("🧠 Multi-Layer Vision & Quant Analysis")
             
             if st.button("🚀 Analyze & Predict Next Move"):
-                api_key = st.secrets.get("GEMINI_API_KEY", None)
+                # Check for OpenRouter key first, fallback to Gemini API Key
+                openrouter_key = st.secrets.get("OPENROUTER_API_KEY", None)
+                gemini_key = st.secrets.get("GEMINI_API_KEY", None)
                 
-                if not api_key:
-                    st.error("⚠️ GEMINI_API_KEY is missing in Streamlit Secrets! Please add your key to enable live chart OCR.")
+                if not openrouter_key and not gemini_key:
+                    st.error("⚠️ Neither OPENROUTER_API_KEY nor GEMINI_API_KEY found in Streamlit Secrets!")
                 else:
                     status_placeholder = st.empty()
-                    status_placeholder.info(f"1. Analyzing '{uploaded_file.name}' via Gemini Vision...")
+                    status_placeholder.info("1. Processing chart screenshot via Vision Engine...")
                     
                     data = None
+                    engine_used = ""
                     
-                    try:
-                        from google import genai
-                        from google.genai import types
+                    # Convert image to base64
+                    import base64
+                    base64_image = base64.b64encode(img_bytes).decode('utf-8')
+                    mime_type = "image/png" if uploaded_file.name.endswith(".png") else "image/jpeg"
+                    
+                    prompt = """
+                    Look closely at this stock chart image and extract actual price values from the Y-axis and title.
+                    Return ONLY a JSON object with no markdown formatting or backticks:
+                    {
+                        "ticker": "exact symbol (e.g. OBEROIRLTY, M&M, RELIANCE, NIFTY)",
+                        "pattern": "exact pattern detected",
+                        "entry": numeric float for entry,
+                        "tp1": numeric float for target 1,
+                        "tp2": numeric float for target 2,
+                        "sl": numeric float for stop loss
+                    }
+                    """
 
-                        client = genai.Client(api_key=api_key)
+                    # METHOD 1: Try OpenRouter Free Vision API
+                    if openrouter_key:
+                        try:
+                            headers = {
+                                "Authorization": f"Bearer {openrouter_key}",
+                                "Content-Type": "application/json"
+                            }
+                            payload = {
+                                "model": "google/gemini-2.0-flash-lite-001:free",
+                                "messages": [
+                                    {
+                                        "role": "user",
+                                        "content": [
+                                            {"type": "text", "text": prompt},
+                                            {"type": "image_url", "image_url": {"url": f"data:{mime_type};base64,{base64_image}"}}
+                                        ]
+                                    }
+                                ]
+                            }
+                            res = requests.post("https://openrouter.ai/api/v1/chat/completions", headers=headers, json=payload, timeout=20)
+                            if res.status_code == 200:
+                                raw_text = res.json()['choices'][0]['message']['content'].strip()
+                                raw_text = re.sub(r'```json\s*|\s*```', '', raw_text)
+                                match = re.search(r'\{.*\}', raw_text, re.DOTALL)
+                                if match:
+                                    data = json.loads(match.group(0))
+                                engine_used = "OpenRouter Free Vision"
+                        except Exception:
+                            pass
 
-                        prompt = """
-                        Look closely at this stock chart image.
-                        Extract the actual values shown on the chart:
-                        1. Stock ticker symbol (e.g. RELIANCE, M&M, OBEROIRLTY, NIFTY, TATAMOTORS).
-                        2. The chart pattern name.
-                        3. Entry price, Target 1, Target 2, Stop Loss from the Y-axis.
-
-                        Return ONLY valid JSON in this exact structure with no markdown or backticks:
-                        {
-                            "ticker": "SYMBOL",
-                            "pattern": "Pattern Name",
-                            "entry": 0.0,
-                            "tp1": 0.0,
-                            "tp2": 0.0,
-                            "sl": 0.0
-                        }
-                        """
-
-                        # Send request using the active gemini-2.0-flash vision model
-                        response = client.models.generate_content(
-                            model='gemini-2.0-flash',
-                            contents=[img, prompt]
-                        )
-                        
-                        raw_text = response.text.strip()
-                        raw_text = re.sub(r'```json\s*', '', raw_text)
-                        raw_text = re.sub(r'```\s*', '', raw_text).strip()
-                        
-                        match = re.search(r'\{.*\}', raw_text, re.DOTALL)
-                        if match:
-                            data = json.loads(match.group(0))
-                        else:
-                            data = json.loads(raw_text)
-
-                        status_placeholder.empty()
-
-                    except Exception as ex:
-                        status_placeholder.empty()
-                        st.error(f"❌ Vision API Error: {str(ex)}")
+                    # METHOD 2: Fallback to Direct Gemini REST Call if OpenRouter isn't set or failed
+                    if not data and gemini_key:
+                        try:
+                            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={gemini_key}"
+                            payload = {
+                                "contents": [{
+                                    "parts": [
+                                        {"text": prompt},
+                                        {"inline_data": {"mime_type": mime_type, "data": base64_image}}
+                                    ]
+                                }]
+                            }
+                            res = requests.post(url, headers={'Content-Type': 'application/json'}, json=payload, timeout=20)
+                            if res.status_code == 200:
+                                raw_text = res.json()['candidates'][0]['content']['parts'][0]['text'].strip()
+                                raw_text = re.sub(r'```json\s*|\s*```', '', raw_text)
+                                match = re.search(r'\{.*\}', raw_text, re.DOTALL)
+                                if match:
+                                    data = json.loads(match.group(0))
+                                engine_used = "Gemini Direct API"
+                            elif res.status_code == 429:
+                                st.error("❌ Gemini API daily free quota is exhausted. Please add `OPENROUTER_API_KEY` to Streamlit Secrets to continue scanning.")
+                        except Exception as ex:
+                            st.error(f"❌ Vision API Error: {str(ex)}")
 
                     if data:
+                        status_placeholder.empty()
                         extracted_ticker = str(data.get("ticker", "UNKNOWN")).upper().replace(".NS", "").strip()
                         pattern_name = str(data.get("pattern", "Technical Pattern Breakout"))
                         entry_p = float(data.get("entry", 100.0))
@@ -226,7 +256,7 @@ elif page == "👁️ Vision AI Chart Pattern Scanner":
                         tp2_p = float(data.get("tp2", entry_p * 1.06))
                         sl_p = float(data.get("sl", entry_p * 0.97))
 
-                        st.info(f"🔍 **Ticker Identified:** `{extracted_ticker}` | **Pattern:** `{pattern_name}`")
+                        st.info(f"🔍 **Ticker Identified:** `{extracted_ticker}` | **Pattern:** `{pattern_name}` | **Engine:** `{engine_used}`")
 
                         df_hist, clean_sym = fetch_market_data(extracted_ticker)
                         
