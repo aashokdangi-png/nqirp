@@ -149,7 +149,7 @@ elif page == "👁️ Vision AI Chart Pattern Scanner":
     if uploaded_file is not None:
         col_img, col_analysis = st.columns([1, 1])
         
-        # Reset file buffer to guarantee fresh bytes on every click
+        # Always read fresh bytes to avoid Streamlit caching previous uploads
         uploaded_file.seek(0)
         img_bytes = uploaded_file.read()
         uploaded_file.seek(0)
@@ -168,59 +168,43 @@ elif page == "👁️ Vision AI Chart Pattern Scanner":
                     st.error("⚠️ GEMINI_API_KEY is missing in Streamlit Secrets! Please add your key to enable live chart OCR.")
                 else:
                     status_placeholder = st.empty()
-                    status_placeholder.info("1. Detecting active model registry on your API key...")
+                    status_placeholder.info(f"1. Analyzing '{uploaded_file.name}' via Gemini Vision...")
                     
                     data = None
-                    selected_model = None
                     
                     try:
-                        import google.generativeai as genai
-                        genai.configure(api_key=api_key)
-                        
-                        # Dynamically find models supported on this API key
-                        available_models = []
-                        try:
-                            for m in genai.list_models():
-                                if "generateContent" in m.supported_generation_methods:
-                                    available_models.append(m.name.replace("models/", ""))
-                        except Exception as e:
-                            st.warning(f"Note on Model List: {str(e)}")
+                        from google import genai
+                        from google.genai import types
 
-                        # Try flash models first, fallback to available models
-                        flash_candidates = [m for m in available_models if "flash" in m]
-                        if flash_candidates:
-                            selected_model = flash_candidates[0]
-                        elif available_models:
-                            selected_model = available_models[0]
-                        else:
-                            selected_model = "gemini-2.0-flash"
+                        client = genai.Client(api_key=api_key)
 
-                        status_placeholder.info(f"2. Analyzing screenshot '{uploaded_file.name}' via `{selected_model}`...")
+                        prompt = """
+                        Look closely at this stock chart image.
+                        Extract the actual values shown on the chart:
+                        1. Stock ticker symbol (e.g. RELIANCE, M&M, OBEROIRLTY, NIFTY, TATAMOTORS).
+                        2. The chart pattern name.
+                        3. Entry price, Target 1, Target 2, Stop Loss from the Y-axis.
 
-                        img_resized = img.copy()
-                        img_resized.thumbnail((1024, 1024))
-                        
-                        prompt = f"""
-                        Examine this stock chart image carefully and extract actual price values from the Y-axis.
-                        Unique upload token: {len(img_bytes)}
-                        
-                        Return ONLY a valid JSON object with no markdown formatting or backticks:
-                        {{
-                            "ticker": "exact symbol (e.g. OBEROIRLTY, M&M, RELIANCE, NIFTY)",
-                            "pattern": "exact pattern detected",
-                            "entry": numeric float for entry,
-                            "tp1": numeric float for target 1,
-                            "tp2": numeric float for target 2,
-                            "sl": numeric float for stop loss
-                        }}
+                        Return ONLY valid JSON in this exact structure with no markdown or backticks:
+                        {
+                            "ticker": "SYMBOL",
+                            "pattern": "Pattern Name",
+                            "entry": 0.0,
+                            "tp1": 0.0,
+                            "tp2": 0.0,
+                            "sl": 0.0
+                        }
                         """
 
-                        vision_model = genai.GenerativeModel(selected_model)
-                        response = vision_model.generate_content([prompt, img_resized])
+                        # Send request using the active gemini-2.0-flash vision model
+                        response = client.models.generate_content(
+                            model='gemini-2.0-flash',
+                            contents=[img, prompt]
+                        )
                         
                         raw_text = response.text.strip()
-                        raw_text = re.sub(r'```json', '', raw_text)
-                        raw_text = re.sub(r'```', '', raw_text).strip()
+                        raw_text = re.sub(r'```json\s*', '', raw_text)
+                        raw_text = re.sub(r'```\s*', '', raw_text).strip()
                         
                         match = re.search(r'\{.*\}', raw_text, re.DOTALL)
                         if match:
@@ -232,7 +216,7 @@ elif page == "👁️ Vision AI Chart Pattern Scanner":
 
                     except Exception as ex:
                         status_placeholder.empty()
-                        st.error(f"❌ Vision Engine Exception: {str(ex)}")
+                        st.error(f"❌ Vision API Error: {str(ex)}")
 
                     if data:
                         extracted_ticker = str(data.get("ticker", "UNKNOWN")).upper().replace(".NS", "").strip()
@@ -242,7 +226,7 @@ elif page == "👁️ Vision AI Chart Pattern Scanner":
                         tp2_p = float(data.get("tp2", entry_p * 1.06))
                         sl_p = float(data.get("sl", entry_p * 0.97))
 
-                        st.info(f"🔍 **Ticker Identified:** `{extracted_ticker}` | **Pattern:** `{pattern_name}` | **Engine:** `{selected_model}`")
+                        st.info(f"🔍 **Ticker Identified:** `{extracted_ticker}` | **Pattern:** `{pattern_name}`")
 
                         df_hist, clean_sym = fetch_market_data(extracted_ticker)
                         
