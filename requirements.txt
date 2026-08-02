@@ -2,7 +2,7 @@ streamlit
 yfinance
 pandas
 numpy
-requests
-pillow
 plotly
+Pillow
+requests
 google-generativeai
