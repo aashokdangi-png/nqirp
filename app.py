@@ -163,11 +163,29 @@ elif page == "👁️ Vision AI Chart Pattern Scanner":
                     st.error("⚠️ GEMINI_API_KEY is missing in Streamlit Secrets! Please add your key to enable live chart OCR.")
                 else:
                     status_placeholder = st.empty()
-                    status_placeholder.info("1. Processing chart screenshot via Gemini Vision SDK...")
+                    status_placeholder.info("1. Auto-detecting active Gemini Vision model...")
                     
                     try:
                         import google.generativeai as genai
                         genai.configure(api_key=api_key)
+                        
+                        # Dynamically find an active model supported on this API key
+                        selected_model = "gemini-2.5-flash"
+                        try:
+                            available_models = [
+                                m.name for m in genai.list_models() 
+                                if "generateContent" in m.supported_generation_methods
+                            ]
+                            # Prioritize flash models, otherwise take the first supported model
+                            flash_models = [m for m in available_models if "flash" in m]
+                            if flash_models:
+                                selected_model = flash_models[0]
+                            elif available_models:
+                                selected_model = available_models[0]
+                        except Exception:
+                            selected_model = "gemini-2.5-flash"
+
+                        status_placeholder.info(f"2. Processing chart image via `{selected_model}`...")
                         
                         prompt = """
                         Look closely at this stock chart image.
@@ -186,12 +204,11 @@ elif page == "👁️ Vision AI Chart Pattern Scanner":
                         }
                         """
 
-                        # Compress image to optimize token consumption and bypass 429 limits
+                        # Resize image to optimize token usage
                         img_resized = img.copy()
                         img_resized.thumbnail((1024, 1024))
                         
-                        # Use generative model SDK directly
-                        vision_model = genai.GenerativeModel('gemini-1.5-flash')
+                        vision_model = genai.GenerativeModel(selected_model)
                         response = vision_model.generate_content([prompt, img_resized])
                         
                         raw_text = response.text.strip()
@@ -211,9 +228,9 @@ elif page == "👁️ Vision AI Chart Pattern Scanner":
                         sl_p = float(data.get("sl", entry_p * 0.97))
 
                         status_placeholder.empty()
-                        st.info(f"🔍 **Ticker Identified:** `{extracted_ticker}` | **Pattern:** `{pattern_name}`")
+                        st.info(f"🔍 **Ticker Identified:** `{extracted_ticker}` | **Pattern:** `{pattern_name}` | **Engine:** `{selected_model}`")
 
-                        # Validate with historical data
+                        # Validate with historical market data
                         df_hist, clean_sym = fetch_market_data(extracted_ticker)
                         
                         if df_hist is not None and not df_hist.empty:
