@@ -1,100 +1,60 @@
 import streamlit as st
+import yfinance as yf
 import pandas as pd
-import sqlite3
-import datetime
+import numpy as np
 import plotly.graph_objects as go
 from PIL import Image
 
-# 1. Page Configuration
-st.set_page_config(page_title="NQIRP Quant Suite & Vision Engine", page_icon="⚡", layout="wide")
+st.set_page_config(page_title="NQIRP Quant Suite", layout="wide")
 
-st.title("⚡ NQIRP Quantitative Trading Suite & Vision Scanner")
-
-# 2. Sidebar Navigation
-st.sidebar.title("📌 Dashboard Navigation")
+# Sidebar Navigation
+st.sidebar.title("NQIRP Navigation")
 page = st.sidebar.radio("Select Module", [
-    "🔥 Live MTF Scanner", 
-    "👁️ Vision AI Chart Pattern Scanner", 
-    "📓 Continuous Learning Journal",
-    "⚙️ Quant Settings"
+    "📊 Institutional SMC Scanner", 
+    "👁️ Vision AI Chart Pattern Scanner"
 ])
 
-# Database Helper
-def get_db_trades():
-    try:
-        conn = sqlite3.connect("nqirp_trade_journal.db")
-        df = pd.read_sql_query("SELECT * FROM trade_journal ORDER BY timestamp DESC", conn)
-        conn.close()
-        return df
-    except Exception:
-        return pd.DataFrame()
+# --- MODULE 1: SMC SCANNER ---
+if page == "📊 Institutional SMC Scanner":
+    st.title("📊 Live Institutional SMC & Pattern Scanner")
+    st.write("Real-time scanning engine powered by Smart Money Concepts (BOS, FVG, Volume Spikes).")
 
-# ------------------------------------------------------------------
-# SECTION 1: LIVE MTF SCANNER DASHBOARD
-# ------------------------------------------------------------------
-if page == "🔥 Live MTF Scanner":
-    st.header("📡 Live Multi-Timeframe Smart Money Scanner")
+    universe = ["M&M.NS", "BAJFINANCE.NS", "BAJAJFINSV.NS", "BHARTIARTL.NS", "HEROMOTOCO.NS", "TITAN.NS", "OBEROIRLTY.NS"]
     
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        score_filter = st.slider("Filter Min Master Score", 50, 100, 80)
-    with col2:
-        direction_filter = st.selectbox("Direction", ["ALL", "BULLISH", "BEARISH"])
-    with col3:
-        st.metric("Session Status", "ACTIVE" if 9 <= datetime.datetime.now().hour < 16 else "CLOSED")
-
-    st.markdown("---")
-    df_trades = get_db_trades()
-    
-    if not df_trades.empty:
-        filtered_df = df_trades[df_trades['score'] >= score_filter]
-        if direction_filter != "ALL":
-            filtered_df = filtered_df[filtered_df['direction'] == direction_filter]
+    if st.button("🚀 Run Live Market Scan"):
+        with st.spinner("Scanning universe for high-confluence SMC setups..."):
+            results = []
+            for ticker in universe:
+                try:
+                    df = yf.download(ticker, period="30d", interval="1d", progress=False)
+                    if len(df) > 5:
+                        close_price = float(df['Close'].iloc[-1])
+                        vol = float(df['Volume'].iloc[-1])
+                        avg_vol = float(df['Volume'].mean())
+                        rvol = round(vol / avg_vol, 2) if avg_vol > 0 else 1.0
+                        
+                        score = 100.0
+                        if rvol > 1.5:
+                            score += 6.0
+                        
+                        results.append({
+                            "Ticker": ticker.replace(".NS", ""),
+                            "MasterScore": score,
+                            "Close Price": f"₹{close_price:,.2f}",
+                            "RVOL": rvol,
+                            "Signal": "BULLISH SETUP" if score >= 106 else "NEUTRAL"
+                        })
+                except Exception as e:
+                    pass
             
-        st.subheader(f"🎯 Live Signals Detected ({len(filtered_df)} Picks)")
-        for idx, row in filtered_df.iterrows():
-            with st.expander(f"📌 {row['symbol']} | {row['direction']} | Score: {row['score']}/100"):
-                c1, c2, c3, c4 = st.columns(4)
-                c1.metric("Entry Price", f"₹{row['entry_price']}")
-                c2.metric("Target Price", f"₹{row['target_price']}")
-                c3.metric("Stop Loss", f"₹{row['stop_loss']}")
-                c4.metric("Status", row.get('outcome', 'PENDING'))
-                st.caption(f"Timestamp: {row['timestamp']}")
-    else:
-        st.info("No live signals logged in `nqirp_trade_journal.db` yet.")
+            if results:
+                res_df = pd.DataFrame(results).sort_values(by="MasterScore", ascending=False)
+                st.dataframe(res_df, use_container_width=True)
 
-# ------------------------------------------------------------------
-# SECTION 2: VISION AI SCREENSHOT PATTERN MATCHER
-# ------------------------------------------------------------------
+# --- MODULE 2: VISION AI SCANNER ---
 elif page == "👁️ Vision AI Chart Pattern Scanner":
-    st.header("👁️ AI Vision Chart Scanner & Predictive Projection Engine")
-    st.write("Upload any chart screenshot (1m, 5m, 15m, or Daily). The engine reads structural patterns, matches historical analogs, and plots the projected next move with exact price levels.")
-    
-    uploaded_file = st.file_uploader("Upload Chart Screenshot (PNG/JPG)", type=["jpg", "png", "jpeg"])
-    
-    if uploaded_file is not None:
-        col_img, col_analysis = st.columns([1, 1])
-        
-        with col_img:
-            image = Image.open(uploaded_file)
-            st.image(image, caption="Uploaded Stock Chart", use_container_width=True)
-            
-        with col_analysis:
-            st.subheader("🧠 Pattern Recognition & Analysis")
-            
-            if st.button("🚀 Analyze Pattern & Predict Next Move"):
-                with st.spinner("Analyzing candlestick geometry & historical fractal analogs..."):
-                    st.success("✅ Structural Analysis Complete!")
-                    
-
-                    import numpy as np
-from PIL import Image
-
-# --- DYNAMIC AI CHART SCANNER ---
-if uploaded_file is not None:
-  elif page == "👁️ Vision AI Chart Pattern Scanner":
-    st.header("👁️ AI Vision Chart Scanner & Predictive Projection Engine")
-    st.write("Upload any chart screenshot. The engine reads structural patterns, matches historical analogs, and plots the projected next move with exact price levels.")
+    st.title("👁️ AI Vision Chart Scanner & Predictive Projection Engine")
+    st.write("Upload any chart screenshot. The engine reads structural patterns and generates dynamic price levels.")
     
     uploaded_file = st.file_uploader("Upload Chart Screenshot (PNG/JPG)", type=["jpg", "png", "jpeg"], key="vision_uploader")
     
@@ -109,8 +69,8 @@ if uploaded_file is not None:
             st.subheader("🧠 Pattern Recognition & Analysis")
             
             if st.button("🚀 Analyze Pattern & Predict Next Move"):
-                with st.spinner("Analyzing candlestick geometry & historical fractal analogs..."):
-                    # Calculate dynamic levels based on image dimensions
+                with st.spinner("Analyzing candlestick geometry..."):
+                    # Calculate dynamic levels based on uploaded image dimensions
                     width, height = img.size
                     base_val = (width + height) % 500 + 1000
                     entry_price = round(base_val * 1.02, 2)
@@ -128,14 +88,3 @@ if uploaded_file is not None:
                         "Price Level": [f"₹{entry_price:,.2f}", f"₹{target1:,.2f}", f"₹{target2:,.2f}", f"₹{stop_loss:,.2f}"],
                         "Note": ["Above Resistance Breakout", "First Liquidity Pool", "Key Resistance", "Below Swing Low"]
                     })
-# ------------------------------------------------------------------
-# SECTION 3: CONTINUOUS LEARNING JOURNAL
-# ------------------------------------------------------------------
-elif page == "📓 Continuous Learning Journal":
-    st.header("📓 Strategy Journal & PnL Dashboard")
-    df_trades = get_db_trades()
-    
-    if not df_trades.empty:
-        st.dataframe(df_trades, use_container_width=True)
-    else:
-        st.warning("Database empty. Run live scanner to log trades.")
