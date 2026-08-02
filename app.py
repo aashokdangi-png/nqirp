@@ -149,9 +149,14 @@ elif page == "👁️ Vision AI Chart Pattern Scanner":
     if uploaded_file is not None:
         col_img, col_analysis = st.columns([1, 1])
         
+        # Reset file buffer to guarantee fresh bytes on every click
+        uploaded_file.seek(0)
+        img_bytes = uploaded_file.read()
+        uploaded_file.seek(0)
+        
         with col_img:
-            img = Image.open(uploaded_file)
-            st.image(img, caption="Uploaded Stock Chart", use_container_width=True)
+            img = Image.open(io.BytesIO(img_bytes))
+            st.image(img, caption=f"Uploaded: {uploaded_file.name}", use_container_width=True)
             
         with col_analysis:
             st.subheader("🧠 Multi-Layer Vision & Quant Analysis")
@@ -163,7 +168,7 @@ elif page == "👁️ Vision AI Chart Pattern Scanner":
                     st.error("⚠️ GEMINI_API_KEY is missing in Streamlit Secrets! Please add your key to enable live chart OCR.")
                 else:
                     status_placeholder = st.empty()
-                    status_placeholder.info("1. Detecting active Gemini Vision engine on your API key...")
+                    status_placeholder.info("1. Detecting active model registry on your API key...")
                     
                     data = None
                     selected_model = None
@@ -172,57 +177,48 @@ elif page == "👁️ Vision AI Chart Pattern Scanner":
                         import google.generativeai as genai
                         genai.configure(api_key=api_key)
                         
-                        # Dynamically discover active models supported on this API key
+                        # Dynamically find models supported on this API key
                         available_models = []
                         try:
                             for m in genai.list_models():
                                 if "generateContent" in m.supported_generation_methods:
-                                    model_id = m.name.replace("models/", "")
-                                    available_models.append(model_id)
-                        except Exception:
-                            pass
+                                    available_models.append(m.name.replace("models/", ""))
+                        except Exception as e:
+                            st.warning(f"Note on Model List: {str(e)}")
 
-                        # Priority order of supported model names
-                        preferred_models = [
-                            "gemini-2.5-flash",
-                            "gemini-2.0-flash",
-                            "gemini-1.5-flash"
-                        ]
-
-                        for p_model in preferred_models:
-                            if p_model in available_models:
-                                selected_model = p_model
-                                break
-                        
-                        if not selected_model and available_models:
+                        # Try flash models first, fallback to available models
+                        flash_candidates = [m for m in available_models if "flash" in m]
+                        if flash_candidates:
+                            selected_model = flash_candidates[0]
+                        elif available_models:
                             selected_model = available_models[0]
-                        elif not selected_model:
-                            selected_model = "gemini-2.5-flash"
+                        else:
+                            selected_model = "gemini-2.0-flash"
 
-                        status_placeholder.info(f"2. Analyzing chart image via `{selected_model}`...")
+                        status_placeholder.info(f"2. Analyzing screenshot '{uploaded_file.name}' via `{selected_model}`...")
 
                         img_resized = img.copy()
                         img_resized.thumbnail((1024, 1024))
                         
-                        prompt = """
+                        prompt = f"""
                         Examine this stock chart image carefully and extract actual price values from the Y-axis.
-                        Return ONLY a JSON object with no markdown formatting:
-                        {
+                        Unique upload token: {len(img_bytes)}
+                        
+                        Return ONLY a valid JSON object with no markdown formatting or backticks:
+                        {{
                             "ticker": "exact symbol (e.g. OBEROIRLTY, M&M, RELIANCE, NIFTY)",
                             "pattern": "exact pattern detected",
-                            "current_price": numeric float read from latest candle,
                             "entry": numeric float for entry,
                             "tp1": numeric float for target 1,
                             "tp2": numeric float for target 2,
                             "sl": numeric float for stop loss
-                        }
+                        }}
                         """
 
                         vision_model = genai.GenerativeModel(selected_model)
                         response = vision_model.generate_content([prompt, img_resized])
                         
                         raw_text = response.text.strip()
-                        # Clean raw text without broken regex string breaks
                         raw_text = re.sub(r'```json', '', raw_text)
                         raw_text = re.sub(r'```', '', raw_text).strip()
                         
@@ -232,76 +228,65 @@ elif page == "👁️ Vision AI Chart Pattern Scanner":
                         else:
                             data = json.loads(raw_text)
 
-                    except Exception as e:
-                        pass
-
-                    if not data:
-                        status_placeholder.warning("⚠️ API Quota limit active — Engine activated quant pattern scanner.")
-                        data = {
-                            "ticker": "OBEROIRLTY",
-                            "pattern": "Bullish SMC Order Block Breakout",
-                            "current_price": 1934.40,
-                            "entry": 1934.40,
-                            "tp1": 1990.00,
-                            "tp2": 2045.00,
-                            "sl": 1890.00
-                        }
-                        selected_model = "Quant Pattern Engine"
-                    else:
                         status_placeholder.empty()
 
-                    extracted_ticker = str(data.get("ticker", "OBEROIRLTY")).upper().replace(".NS", "").strip()
-                    pattern_name = str(data.get("pattern", "Technical Pattern Breakout"))
-                    entry_p = float(data.get("entry", 1934.40))
-                    tp1_p = float(data.get("tp1", entry_p * 1.03))
-                    tp2_p = float(data.get("tp2", entry_p * 1.06))
-                    sl_p = float(data.get("sl", entry_p * 0.97))
+                    except Exception as ex:
+                        status_placeholder.empty()
+                        st.error(f"❌ Vision Engine Exception: {str(ex)}")
 
-                    st.info(f"🔍 **Ticker Identified:** `{extracted_ticker}` | **Pattern:** `{pattern_name}` | **Engine:** `{selected_model}`")
+                    if data:
+                        extracted_ticker = str(data.get("ticker", "UNKNOWN")).upper().replace(".NS", "").strip()
+                        pattern_name = str(data.get("pattern", "Technical Pattern Breakout"))
+                        entry_p = float(data.get("entry", 100.0))
+                        tp1_p = float(data.get("tp1", entry_p * 1.03))
+                        tp2_p = float(data.get("tp2", entry_p * 1.06))
+                        sl_p = float(data.get("sl", entry_p * 0.97))
 
-                    df_hist, clean_sym = fetch_market_data(extracted_ticker)
-                    
-                    if df_hist is not None and not df_hist.empty:
-                        close_vals = df_hist['Close'].values
-                        match_count = 0
-                        bull_count = 0
-                        for i in range(10, len(close_vals) - 5):
-                            if abs((close_vals[i] - close_vals[i-3])/close_vals[i-3] - (close_vals[-1] - close_vals[-4])/close_vals[-4]) < 0.03:
-                                match_count += 1
-                                if close_vals[i+5] > close_vals[i]:
-                                    bull_count += 1
-                        win_rate = round((bull_count / match_count * 100), 1) if match_count > 0 else 82.4
-                    else:
-                        win_rate = 81.0
+                        st.info(f"🔍 **Ticker Identified:** `{extracted_ticker}` | **Pattern:** `{pattern_name}` | **Engine:** `{selected_model}`")
 
-                    st.success("✅ Analysis & Historical Validation Complete!")
-                    
-                    st.markdown("### 📊 Extracted Setup & Historical Confluence:")
-                    st.markdown(f"* **Historical Match Probability:** `{win_rate}%`")
-                    
-                    st.table({
-                        "Signal Label": ["Recommended Entry", "Target 1 (TP1)", "Target 2 (TP2)", "Stop Loss (SL)"],
-                        "Price Level": [f"₹{entry_p:,.2f}", f"₹{tp1_p:,.2f}", f"₹{tp2_p:,.2f}", f"₹{sl_p:,.2f}"],
-                        "Note": ["Entry Point", "First Resistance", "Key Target Level", "Below Structure Support"]
-                    })
+                        df_hist, clean_sym = fetch_market_data(extracted_ticker)
+                        
+                        if df_hist is not None and not df_hist.empty:
+                            close_vals = df_hist['Close'].values
+                            match_count = 0
+                            bull_count = 0
+                            for i in range(10, len(close_vals) - 5):
+                                if abs((close_vals[i] - close_vals[i-3])/close_vals[i-3] - (close_vals[-1] - close_vals[-4])/close_vals[-4]) < 0.03:
+                                    match_count += 1
+                                    if close_vals[i+5] > close_vals[i]:
+                                        bull_count += 1
+                            win_rate = round((bull_count / match_count * 100), 1) if match_count > 0 else 82.4
+                        else:
+                            win_rate = 81.0
 
-                    st.subheader("📈 Projected Price Trajectory")
+                        st.success("✅ Analysis & Historical Validation Complete!")
+                        
+                        st.markdown("### 📊 Extracted Setup & Historical Confluence:")
+                        st.markdown(f"* **Historical Match Probability:** `{win_rate}%`")
+                        
+                        st.table({
+                            "Signal Label": ["Recommended Entry", "Target 1 (TP1)", "Target 2 (TP2)", "Stop Loss (SL)"],
+                            "Price Level": [f"₹{entry_p:,.2f}", f"₹{tp1_p:,.2f}", f"₹{tp2_p:,.2f}", f"₹{sl_p:,.2f}"],
+                            "Note": ["Entry Point", "First Resistance", "Key Target Level", "Below Structure Support"]
+                        })
 
-                    x_input = np.arange(1, 21)
-                    y_input = np.linspace(sl_p * 1.005, entry_p, 20)
-                    x_proj = np.arange(20, 31)
-                    y_proj = np.linspace(entry_p, tp2_p, 11)
+                        st.subheader("📈 Projected Price Trajectory")
 
-                    fig = go.Figure()
-                    fig.add_trace(go.Scatter(x=x_input, y=y_input, mode='lines+markers', name='Input Price Action', line=dict(color='#00e5ff', width=2)))
-                    fig.add_trace(go.Scatter(x=x_proj, y=y_proj, mode='lines+markers', name=f'Predicted Pathway ({win_rate}% Probable)', line=dict(color='#00e676', width=3, dash='dash')))
+                        x_input = np.arange(1, 21)
+                        y_input = np.linspace(sl_p * 1.005, entry_p, 20)
+                        x_proj = np.arange(20, 31)
+                        y_proj = np.linspace(entry_p, tp2_p, 11)
 
-                    fig.add_hline(y=tp1_p, line_dash="dash", line_color="#81c784", annotation_text=f"TARGET 1: ₹{tp1_p}")
-                    fig.add_hline(y=entry_p, line_dash="dash", line_color="#ffb74d", annotation_text=f"ENTRY: ₹{entry_p}")
-                    fig.add_hline(y=sl_p, line_dash="dash", line_color="#e57373", annotation_text=f"STOP LOSS: ₹{sl_p}")
+                        fig = go.Figure()
+                        fig.add_trace(go.Scatter(x=x_input, y=y_input, mode='lines+markers', name='Input Price Action', line=dict(color='#00e5ff', width=2)))
+                        fig.add_trace(go.Scatter(x=x_proj, y=y_proj, mode='lines+markers', name=f'Predicted Pathway ({win_rate}% Probable)', line=dict(color='#00e676', width=3, dash='dash')))
 
-                    fig.update_layout(title=f"AI Pattern Matcher - {extracted_ticker} ({pattern_name})", xaxis_title="Candle Progress", yaxis_title="Price (INR)", template="plotly_dark", height=450)
-                    st.plotly_chart(fig, use_container_width=True)
+                        fig.add_hline(y=tp1_p, line_dash="dash", line_color="#81c784", annotation_text=f"TARGET 1: ₹{tp1_p}")
+                        fig.add_hline(y=entry_p, line_dash="dash", line_color="#ffb74d", annotation_text=f"ENTRY: ₹{entry_p}")
+                        fig.add_hline(y=sl_p, line_dash="dash", line_color="#e57373", annotation_text=f"STOP LOSS: ₹{sl_p}")
+
+                        fig.update_layout(title=f"AI Pattern Matcher - {extracted_ticker} ({pattern_name})", xaxis_title="Candle Progress", yaxis_title="Price (INR)", template="plotly_dark", height=450)
+                        st.plotly_chart(fig, use_container_width=True)
 # --- MODULE 3: TRADING JOURNAL & ANALYTICS ---
 elif page == "📘 Quant Trading Journal & Analytics":
     st.title("📘 Quant Trading Journal & Analytics")
