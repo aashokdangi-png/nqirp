@@ -163,120 +163,70 @@ elif page == "👁️ Vision AI Chart Pattern Scanner":
                     st.error("⚠️ GEMINI_API_KEY is missing in Streamlit Secrets! Please add your key to enable live chart OCR.")
                 else:
                     status_placeholder = st.empty()
-                    status_placeholder.info("1. Auto-detecting active Gemini Vision model...")
+                    status_placeholder.info("1. Detecting active Gemini Vision engine on your API key...")
+                    
+                    data = None
+                    selected_model = None
                     
                     try:
                         import google.generativeai as genai
                         genai.configure(api_key=api_key)
                         
-                        # Dynamically find an active model supported on this API key
-                        selected_model = "gemini-2.5-flash"
+                        # Fetch all models supported on this specific API key
+                        available_models = []
                         try:
-                            available_models = [
-                                m.name for m in genai.list_models() 
-                                if "generateContent" in m.supported_generation_methods
-                            ]
-                            # Prioritize flash models, otherwise take the first supported model
-                            flash_models = [m for m in available_models if "flash" in m]
-                            if flash_models:
-                                selected_model = flash_models[0]
-                            elif available_models:
-                                selected_model = available_models[0]
+                            for m in genai.list_models():
+                                if "generateContent" in m.supported_generation_methods:
+                                    # Strip 'models/' prefix if present
+                                    model_id = m.name.replace("models/", "")
+                                    available_models.append(model_id)
                         except Exception:
+                            pass
+
+                        # Priority order for vision models
+                        preferred_models = [
+                            "gemini-3.6-flash",
+                            "gemini-3.5-flash-lite",
+                            "gemini-2.5-flash",
+                            "gemini-1.5-flash"
+                        ]
+
+                        # Select the first supported model from priority list, or default to first available
+                        for p_model in preferred_models:
+                            if p_model in available_models:
+                                selected_model = p_model
+                                break
+                        
+                        if not selected_model and available_models:
+                            selected_model = available_models[0]
+                        elif not selected_model:
                             selected_model = "gemini-2.5-flash"
 
-                        status_placeholder.info(f"2. Processing chart image via `{selected_model}`...")
-                        
-                        prompt = """
-                        Look closely at this stock chart image.
-                        1. Identify the stock symbol / ticker printed in the upper left corner or title (e.g. OBEROIRLTY, M&M, RELIANCE, TATAMOTORS, NIFTY).
-                        2. Read the latest close price and Y-axis numbers carefully.
-                        3. Calculate structural Entry, Target 1, Target 2, and Stop Loss.
-                        
-                        Return ONLY valid JSON with no markdown formatting or backticks:
-                        {
-                            "ticker": "extracted ticker symbol",
-                            "pattern": "detected chart pattern name",
-                            "entry": float price value,
-                            "tp1": float price target 1,
-                            "tp2": float price target 2,
-                            "sl": float stop loss price
-                        }
-                        """
+                        status_placeholder.info(f"2. Analyzing chart image via `{selected_model}`...")
 
-                        # Resize image to optimize token usage
+                        # Compress image to optimize token consumption
                         img_resized = img.copy()
                         img_resized.thumbnail((1024, 1024))
                         
+                        prompt = """
+                        Examine this stock chart image carefully and extract actual price values from the Y-axis.
+                        Return ONLY a JSON object with no markdown formatting:
+                        {
+                            "ticker": "exact symbol (e.g. OBEROIRLTY, M&M, RELIANCE, NIFTY)",
+                            "pattern": "exact pattern detected",
+                            "current_price": numeric float read from latest candle,
+                            "entry": numeric float for entry,
+                            "tp1": numeric float for target 1,
+                            "tp2": numeric float for target 2,
+                            "sl": numeric float for stop loss
+                        }
+                        """
+
                         vision_model = genai.GenerativeModel(selected_model)
                         response = vision_model.generate_content([prompt, img_resized])
                         
                         raw_text = response.text.strip()
-                        raw_text = re.sub(r'```json\s*|\s*```', '', raw_text)
-                        match = re.search(r'\{.*\}', raw_text, re.DOTALL)
-                        
-                        if match:
-                            data = json.loads(match.group(0))
-                        else:
-                            data = json.loads(raw_text)
-
-                        extracted_ticker = str(data.get("ticker", "OBEROIRLTY")).upper().replace(".NS", "").strip()
-                        pattern_name = str(data.get("pattern", "Technical Pattern Breakout"))
-                        entry_p = float(data.get("entry", 1934.40))
-                        tp1_p = float(data.get("tp1", entry_p * 1.03))
-                        tp2_p = float(data.get("tp2", entry_p * 1.06))
-                        sl_p = float(data.get("sl", entry_p * 0.97))
-
-                        status_placeholder.empty()
-                        st.info(f"🔍 **Ticker Identified:** `{extracted_ticker}` | **Pattern:** `{pattern_name}` | **Engine:** `{selected_model}`")
-
-                        # Validate with historical market data
-                        df_hist, clean_sym = fetch_market_data(extracted_ticker)
-                        
-                        if df_hist is not None and not df_hist.empty:
-                            close_vals = df_hist['Close'].values
-                            match_count = 0
-                            bull_count = 0
-                            for i in range(10, len(close_vals) - 5):
-                                if abs((close_vals[i] - close_vals[i-3])/close_vals[i-3] - (close_vals[-1] - close_vals[-4])/close_vals[-4]) < 0.03:
-                                    match_count += 1
-                                    if close_vals[i+5] > close_vals[i]:
-                                        bull_count += 1
-                            win_rate = round((bull_count / match_count * 100), 1) if match_count > 0 else 82.4
-                        else:
-                            win_rate = 81.0
-
-                        st.success("✅ Analysis & Historical Validation Complete!")
-                        
-                        st.markdown("### 📊 Extracted Setup & Historical Confluence:")
-                        st.markdown(f"* **Historical Match Probability:** `{win_rate}%`")
-                        
-                        st.table({
-                            "Signal Label": ["Recommended Entry", "Target 1 (TP1)", "Target 2 (TP2)", "Stop Loss (SL)"],
-                            "Price Level": [f"₹{entry_p:,.2f}", f"₹{tp1_p:,.2f}", f"₹{tp2_p:,.2f}", f"₹{sl_p:,.2f}"],
-                            "Note": ["Entry Point", "First Resistance", "Key Target Level", "Below Structure Support"]
-                        })
-
-                        st.subheader("📈 Projected Price Trajectory")
-
-                        x_input = np.arange(1, 21)
-                        y_input = np.linspace(sl_p * 1.005, entry_p, 20)
-                        x_proj = np.arange(20, 31)
-                        y_proj = np.linspace(entry_p, tp2_p, 11)
-
-                        fig = go.Figure()
-                        fig.add_trace(go.Scatter(x=x_input, y=y_input, mode='lines+markers', name='Input Price Action', line=dict(color='#00e5ff', width=2)))
-                        fig.add_trace(go.Scatter(x=x_proj, y=y_proj, mode='lines+markers', name=f'Predicted Pathway ({win_rate}% Probable)', line=dict(color='#00e676', width=3, dash='dash')))
-
-                        fig.add_hline(y=tp1_p, line_dash="dash", line_color="#81c784", annotation_text=f"TARGET 1: ₹{tp1_p}")
-                        fig.add_hline(y=entry_p, line_dash="dash", line_color="#ffb74d", annotation_text=f"ENTRY: ₹{entry_p}")
-                        fig.add_hline(y=sl_p, line_dash="dash", line_color="#e57373", annotation_text=f"STOP LOSS: ₹{sl_p}")
-
-                        fig.update_layout(title=f"AI Pattern Matcher - {extracted_ticker} ({pattern_name})", xaxis_title="Candle Progress", yaxis_title="Price (INR)", template="plotly_dark", height=450)
-                        st.plotly_chart(fig, use_container_width=True)
-
-                    except Exception as e:
-                        st.error(f"Error executing Gemini Vision SDK: {str(e)}")
+                        raw_text = re.sub(r'```json\s*|\s*
 # --- MODULE 3: TRADING JOURNAL & ANALYTICS ---
 elif page == "📘 Quant Trading Journal & Analytics":
     st.title("📘 Quant Trading Journal & Analytics")
