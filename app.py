@@ -164,8 +164,11 @@ elif page == "👁️ Vision AI Chart Pattern Scanner":
                 else:
                     with st.spinner("1. Reading chart image via Gemini Vision API..."):
                         try:
+                            # Optimize image size to stay well within free-tier payload rate limits
+                            img_resized = img.copy()
+                            img_resized.thumbnail((800, 800))
                             img_byte_arr = io.BytesIO()
-                            img.save(img_byte_arr, format=img.format if img.format else 'PNG')
+                            img_resized.save(img_byte_arr, format='JPEG', quality=85)
                             import base64
                             base64_image = base64.b64encode(img_byte_arr.getvalue()).decode('utf-8')
                             
@@ -187,30 +190,27 @@ elif page == "👁️ Vision AI Chart Pattern Scanner":
                                 "contents": [{
                                     "parts": [
                                         {"text": prompt},
-                                        {"inline_data": {"mime_type": "image/png", "data": base64_image}}
+                                        {"inline_data": {"mime_type": "image/jpeg", "data": base64_image}}
                                     ]
                                 }]
                             }
 
-                            # Candidate models to iterate through if quota or endpoint errors occur
-                            candidate_models = [
-                                "gemini-1.5-flash",
-                                "gemini-2.0-flash",
-                                "gemini-2.5-flash",
-                                "gemini-1.5-pro"
+                            # Primary stable endpoints for Vision API
+                            endpoints = [
+                                f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}",
+                                f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key={api_key}",
+                                f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent?key={api_key}"
                             ]
 
                             response = None
-                            successful_model = None
-
-                            for model in candidate_models:
-                                url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+                            for url in endpoints:
                                 res = requests.post(url, headers={'Content-Type': 'application/json'}, data=json.dumps(payload))
-                                
                                 if res.status_code == 200:
                                     response = res
-                                    successful_model = model
                                     break
+                                elif res.status_code == 429:
+                                    import time
+                                    time.sleep(2)  # Short pause before trying next endpoint
 
                             if response and response.status_code == 200:
                                 res_json = response.json()
@@ -228,7 +228,7 @@ elif page == "👁️ Vision AI Chart Pattern Scanner":
                                 tp2_p = float(data.get("tp2", entry_p * 1.06))
                                 sl_p = float(data.get("sl", entry_p * 0.97))
 
-                                st.info(f"🔍 **Ticker:** `{extracted_ticker}` | **Pattern:** `{pattern_name}` | **Engine:** `{successful_model}`")
+                                st.info(f"🔍 **Ticker:** `{extracted_ticker}` | **Pattern:** `{pattern_name}`")
 
                                 df_hist, clean_sym = fetch_market_data(extracted_ticker)
                                 
@@ -275,7 +275,7 @@ elif page == "👁️ Vision AI Chart Pattern Scanner":
                                 st.plotly_chart(fig, use_container_width=True)
 
                             else:
-                                st.warning("⚠️ API Rate Limit/Quota reached on free tier. Please wait 30 seconds or verify your API key at https://aistudio.google.dev/")
+                                st.error("⚠️ Free tier rate limit reached. Please wait 15–20 seconds and click analyze again.")
                         except Exception as e:
                             st.error(f"Failed to analyze image with Vision API: {str(e)}")
 # --- MODULE 3: TRADING JOURNAL & ANALYTICS ---
