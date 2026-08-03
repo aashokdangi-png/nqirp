@@ -18,7 +18,7 @@ page = st.sidebar.radio(
     key="nav_sidebar_radio"
 )
 
-# Helper function for yfinance historical market data (used in Vision Module)
+# Helper function for yfinance historical market data (Vision Module)
 def fetch_market_data(ticker):
     try:
         sym = ticker if ticker.endswith(".NS") else f"{ticker}.NS"
@@ -42,7 +42,7 @@ if page == "📊 Institutional SMC Intraday Scanner":
     with col_cfg1:
         search_query = st.text_input("🔍 Search Ticker / Filter Universe (e.g. M&M, RELIANCE, SBIN)", "", key="smc_search_input")
     with col_cfg2:
-        rvol_threshold = st.slider("Min RVOL Filter", 0.5, 3.0, 1.0, 0.1, key="smc_rvol_slider")
+        rvol_threshold = st.slider("Min RVOL Filter", 0.5, 3.0, 0.8, 0.1, key="smc_rvol_slider")
 
     # Dual-Engine 5-Minute Data Fetcher
     def fetch_intraday_data(ticker_symbol):
@@ -53,7 +53,6 @@ if page == "📊 Institutional SMC Intraday Scanner":
         upstox_token = st.secrets.get("UPSTOX_ACCESS_TOKEN", None)
         if upstox_token:
             try:
-                # Upstox API v2 Intraday 5m Candle Request
                 clean_ticker = ticker_symbol.upper().replace(".NS", "")
                 upstox_url = f"https://api.upstox.com/v2/historical-candle/NSE_EQ|{clean_ticker}/5minute/{pd.Timestamp.now().strftime('%Y-%m-%d')}"
                 headers = {'Accept': 'application/json', 'Authorization': f'Bearer {upstox_token.strip()}'}
@@ -82,33 +81,32 @@ if page == "📊 Institutional SMC Intraday Scanner":
 
         return df, data_source
 
-    # SMC Core Quantitative Calculation Engine
+    # Full Colab SMC Core Quantitative Engine
     def analyze_smc_structure(df):
-        if len(df) < 15:
+        if len(df) < 10:
             return None
             
         latest = df.iloc[-1]
-        prev_candles = df.iloc[-15:-1]
+        lookback_window = df.iloc[-30:-1] if len(df) >= 30 else df.iloc[:-1]
         
         latest_close = float(latest['Close'])
         latest_high = float(latest['High'])
         latest_low = float(latest['Low'])
         
-        # RVOL Calculation
+        # Relative Volume (RVOL)
         avg_vol = df['Volume'].tail(20).mean()
         curr_vol = float(latest['Volume'])
         rvol = round(curr_vol / avg_vol, 2) if avg_vol > 0 else 1.0
 
-        # Order Block (OB) & FVG Identification Logic
-        # Order Block = Lowest low of last 10 candles prior to recent expansion
-        ob_low = prev_candles['Low'].min()
-        ob_high = prev_candles['High'].loc[prev_candles['Low'] == ob_low].iloc[0] if not prev_candles.empty else latest_low
+        # Order Block (OB) Logic: Find lowest low range prior to recent expansion
+        ob_low = float(lookback_window['Low'].min())
+        ob_high = float(lookback_window['High'].loc[lookback_window['Low'] == ob_low].iloc[0]) if not lookback_window.empty else latest_low
         
-        # Entry set at 50% Equilibrium (Discount) of the Order Block / Range
+        # SMC Entry at 50% Equilibrium (Discount Entry Level)
         entry_price = round(ob_low + (latest_high - ob_low) * 0.50, 2)
         
-        # Stop Loss below OB structural low with 0.15% buffer
-        sl_price = round(ob_low * 0.998, 2)
+        # Dynamic Intraday Stop Loss (~0.25% structural buffer below OB)
+        sl_price = round(ob_low * 0.9975, 2)
         risk = entry_price - sl_price
         
         if risk <= 0:
@@ -119,11 +117,11 @@ if page == "📊 Institutional SMC Intraday Scanner":
         tp1_price = round(entry_price + (risk * 2.0), 2)
         tp2_price = round(entry_price + (risk * 3.0), 2)
         
-        # FVG Check (Gap between Candle 1 High and Candle 3 Low)
-        fvg_detected = "Yes (Bullish)" if (len(df) >= 3 and df['Low'].iloc[-1] > df['High'].iloc[-3]) else "OB Structural"
+        # Fair Value Gap (FVG) Detection
+        fvg_detected = "Bullish FVG" if (len(df) >= 3 and df['Low'].iloc[-1] > df['High'].iloc[-3]) else "Order Block Zone"
         
-        # Confluence AI Score
-        ai_score = min(99, int(75 + (rvol * 8) + (2 if fvg_detected.startswith("Yes") else 0)))
+        # AI Confluence Score
+        ai_score = min(98, int(72 + (rvol * 10) + (5 if "FVG" in fvg_detected else 0)))
 
         return {
             "Close Price": latest_close,
@@ -149,7 +147,8 @@ if page == "📊 Institutional SMC Intraday Scanner":
                 
                 if df_intra is not None and not df_intra.empty:
                     smc_res = analyze_smc_structure(df_intra)
-                    if smc_res and smc_res['RVOL'] >= rvol_threshold:
+                    if smc_res:
+                        # Append all valid calculations, tagging whether RVOL passed filter
                         results.append({
                             "Ticker": ticker,
                             "Data Source": source_used,
@@ -161,14 +160,22 @@ if page == "📊 Institutional SMC Intraday Scanner":
                             "Stop Loss (SL)": f"₹{smc_res['Stop Loss (SL)']:,.2f}",
                             "R:R Ratio": smc_res['R:R Ratio'],
                             "RVOL": smc_res['RVOL'],
-                            "Structure": smc_res['SMC Structure']
+                            "Structure": smc_res['SMC Structure'],
+                            "Passes RVOL Filter": smc_res['RVOL'] >= rvol_threshold
                         })
 
             if results:
-                st.success(f"✅ Intraday Scan Complete! Found {len(results)} active setups.")
-                st.table(pd.DataFrame(results))
+                df_res = pd.DataFrame(results)
+                filtered_df = df_res[df_res["Passes RVOL Filter"] == True].drop(columns=["Passes RVOL Filter"])
+                
+                if not filtered_df.empty:
+                    st.success(f"✅ Found {len(filtered_df)} active intraday SMC setups matching RVOL >= {rvol_threshold}!")
+                    st.table(filtered_df)
+                else:
+                    st.info(f"ℹ️ No setups matched RVOL >= {rvol_threshold}. Showing calculated intraday SMC levels for universe below:")
+                    st.table(df_res.drop(columns=["Passes RVOL Filter"]))
             else:
-                st.warning("No intraday setups matching the selected RVOL threshold were found right now.")
+                st.warning("Unable to fetch intraday candle data. Check market connectivity.")
 
 
 # ==============================================================================
