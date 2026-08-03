@@ -93,12 +93,6 @@ def fetch_data(ticker: str, period="1mo", interval="5m"):
         return pd.DataFrame()
 
 def run_smc_analysis(df: pd.DataFrame, timeframe_label="INTRADAY"):
-    """
-    PRESERVES ALL EXISTING LOGIC (FVG, BOS, Trend Bias, Master Score, 1:2.5 RR)
-    AND ADDS:
-    - Reversal & Pullback Protection (Volume Fading Checks)
-    - Chart Patterns: Double Tops/Bottoms, Triangles, Flags, Cup & Handle
-    """
     if df.empty or len(df) < 30:
         return None
 
@@ -108,7 +102,9 @@ def run_smc_analysis(df: pd.DataFrame, timeframe_label="INTRADAY"):
     open_p = df['Open']
     volume = df['Volume']
 
-    c, h, l, o, v = float(close.iloc[-1]), float(high.iloc[-1]), float(low.iloc[-1]), float(open_p.iloc[-1]), float(volume.iloc[-1])
+    # FIX 1: Prioritize explicit LTP to prevent stale close/settlement price mismatches
+    l_price = float(df['LTP'].iloc[-1]) if 'LTP' in df.columns else float(close.iloc[-1])
+    c, h, l, o, v = l_price, float(high.iloc[-1]), float(low.iloc[-1]), float(open_p.iloc[-1]), float(volume.iloc[-1])
 
     v20 = float(volume.tail(20).mean())
     rvol = v / v20 if v20 > 0 else 1.0
@@ -128,9 +124,7 @@ def run_smc_analysis(df: pd.DataFrame, timeframe_label="INTRADAY"):
     direction = "NEUTRAL"
     breakout_level = c
 
-    # --------------------------------------------------------------------------
-    # 1. EXISTING: FAIR VALUE GAP (FVG)
-    # --------------------------------------------------------------------------
+    # 1. FAIR VALUE GAP (FVG)
     bullish_fvg = float(low.iloc[-1]) > float(high.iloc[-3]) if len(df) >= 3 else False
     bearish_fvg = float(high.iloc[-1]) < float(low.iloc[-3]) if len(df) >= 3 else False
 
@@ -145,9 +139,7 @@ def run_smc_analysis(df: pd.DataFrame, timeframe_label="INTRADAY"):
         direction = "BEARISH"
         breakout_level = float(low.iloc[-3])
 
-    # --------------------------------------------------------------------------
-    # 2. EXISTING: BREAK OF STRUCTURE (BOS)
-    # --------------------------------------------------------------------------
+    # 2. BREAK OF STRUCTURE (BOS)
     if c > h20_prev:
         smc_confluences.append("Bullish BOS")
         scores.append(92)
@@ -159,9 +151,7 @@ def run_smc_analysis(df: pd.DataFrame, timeframe_label="INTRADAY"):
         direction = "BEARISH"
         breakout_level = l20_prev
 
-    # --------------------------------------------------------------------------
-    # 3. NEW ADDITION: DOUBLE TOP & DOUBLE BOTTOM REJECTIONS
-    # --------------------------------------------------------------------------
+    # 3. DOUBLE TOP & DOUBLE BOTTOM REJECTIONS
     peak1 = float(high.tail(20).iloc[:-5].max())
     peak2 = float(high.tail(5).max())
     trough1 = float(low.tail(20).iloc[:-5].min())
@@ -179,9 +169,7 @@ def run_smc_analysis(df: pd.DataFrame, timeframe_label="INTRADAY"):
         direction = "BULLISH"
         breakout_level = trough2
 
-    # --------------------------------------------------------------------------
-    # 4. NEW ADDITION: TRIANGLE PATTERNS (Ascending, Descending, Symmetrical)
-    # --------------------------------------------------------------------------
+    # 4. TRIANGLE PATTERNS
     recent_highs = high.tail(15)
     recent_lows = low.tail(15)
     high_slope = (recent_highs.iloc[-1] - recent_highs.iloc[0]) / 15
@@ -209,9 +197,7 @@ def run_smc_analysis(df: pd.DataFrame, timeframe_label="INTRADAY"):
             direction = "BEARISH"
             breakout_level = float(recent_lows.iloc[-3])
 
-    # --------------------------------------------------------------------------
-    # 5. NEW ADDITION: FLAG PATTERNS (Bull Flag & Bear Flag)
-    # --------------------------------------------------------------------------
+    # 5. FLAG PATTERNS
     pole_move = (close.iloc[-5] - close.iloc[-25]) / close.iloc[-25]
     flag_range = (high.tail(5).max() - low.tail(5).min()) / close.iloc[-1]
 
@@ -226,9 +212,7 @@ def run_smc_analysis(df: pd.DataFrame, timeframe_label="INTRADAY"):
         direction = "BEARISH"
         breakout_level = float(low.tail(5).min())
 
-    # --------------------------------------------------------------------------
-    # 6. NEW ADDITION: CUP AND HANDLE / INVERTED CUP AND HANDLE
-    # --------------------------------------------------------------------------
+    # 6. CUP AND HANDLE PATTERNS
     mid_low = low.tail(20).iloc[5:15].min()
     edge_high1 = high.tail(20).iloc[0:5].max()
     edge_high2 = high.tail(20).iloc[12:17].max()
@@ -253,19 +237,13 @@ def run_smc_analysis(df: pd.DataFrame, timeframe_label="INTRADAY"):
             direction = "BEARISH"
             breakout_level = float(edge_low2)
 
-    # Cancel signal if no confluences triggered
     if not scores or direction == "NEUTRAL":
         return None
 
-    # --------------------------------------------------------------------------
-    # EXISTING: MASTER SCORE CALCULATION
-    # --------------------------------------------------------------------------
     master_score = max(scores) + min(len(smc_confluences) * 4.0, 20.0)
 
-    # --------------------------------------------------------------------------
-    # NEW FEATURE: EXTENSION & REVERSAL PROTECTOR
-    # --------------------------------------------------------------------------
-    max_extension_pct = 0.002  # 0.2% max extension threshold
+    # EXTENSION & ENTRY LOGIC
+    max_extension_pct = 0.002
     
     if direction == "BULLISH":
         pct_extended = (c - breakout_level) / breakout_level if breakout_level > 0 else 0
@@ -279,7 +257,6 @@ def run_smc_analysis(df: pd.DataFrame, timeframe_label="INTRADAY"):
         trade_status = "✅ ACTIVE ENTRY"
         suggested_entry = round(c, 2)
 
-    # Reversal probability based on volume dynamics
     if pct_extended > 0 and rvol < 1.0:
         target_prob = "⚠️ LOW (Fading Volume - Reversal Risk)"
     elif rvol >= 2.5 and len(smc_confluences) >= 2:
@@ -289,18 +266,34 @@ def run_smc_analysis(df: pd.DataFrame, timeframe_label="INTRADAY"):
     else:
         target_prob = "⚠️ LOW (Weak Volume)"
 
-    # --------------------------------------------------------------------------
-    # EXISTING: TARGET & STOP LOSS (Scaled 1:2.5 Risk-to-Reward)
-    # --------------------------------------------------------------------------
+    # TARGET & STOP LOSS CALCULATIONS
     if timeframe_label == "INTRADAY":
         stop_dist = max(1.5 * atr, suggested_entry * 0.005)
-        target_dist = stop_dist * 2.5 
+        raw_target_dist = stop_dist * 2.5 
     else:
         stop_dist = 1.0 * atr
-        target_dist = 2.5 * atr
+        raw_target_dist = 2.5 * atr
 
-    stop_loss = round(suggested_entry - stop_dist if direction == "BULLISH" else suggested_entry + stop_dist, 2)
-    target_price = round(suggested_entry + target_dist if direction == "BULLISH" else suggested_entry - target_dist, 2)
+    if direction == "BULLISH":
+        stop_loss = round(suggested_entry - stop_dist, 2)
+        raw_target = suggested_entry + raw_target_dist
+        # FIX 2: Cap target at resistance if raw target exceeds key structural high
+        if raw_target > h20_prev and h20_prev > suggested_entry:
+            target_price = round(h20_prev * 0.9995, 2)
+        else:
+            target_price = round(raw_target, 2)
+    else:
+        stop_loss = round(suggested_entry + stop_dist, 2)
+        raw_target = suggested_entry - raw_target_dist
+        # FIX 2: Cap target at support if raw target drops below key structural low
+        if raw_target < l20_prev and l20_prev < suggested_entry:
+            target_price = round(l20_prev * 1.0005, 2)
+        else:
+            target_price = round(raw_target, 2)
+
+    actual_risk = abs(suggested_entry - stop_loss)
+    actual_reward = abs(target_price - suggested_entry)
+    rr_ratio = round(actual_reward / actual_risk, 2) if actual_risk > 0 else 2.5
 
     return {
         "Symbol": df.name if hasattr(df, 'name') else "STOCK",
@@ -312,7 +305,7 @@ def run_smc_analysis(df: pd.DataFrame, timeframe_label="INTRADAY"):
         "Current Price": round(c, 2),
         "Target Price": target_price,
         "Stop Loss": stop_loss,
-        "R/R Ratio": "1 : 2.5",
+        "R/R Ratio": f"1 : {rr_ratio}",
         "RVOL": round(rvol, 2),
         "SMC Signals": ", ".join(smc_confluences)
     }
