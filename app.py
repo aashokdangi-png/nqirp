@@ -44,24 +44,24 @@ if page == "📊 Institutional SMC Intraday Scanner":
     with col_cfg2:
         rvol_threshold = st.slider("Min RVOL Filter", 0.5, 3.0, 0.8, 0.1, key="smc_rvol_slider")
 
-    # Dual-Engine 5-Minute Data Fetcher
+   # Dual-Engine 5-Minute Data Fetcher
     def fetch_intraday_data(ticker_symbol):
         df = None
         data_source = "yFinance Intraday (5m)"
         
-        # 1. Attempt Upstox Live API First (using token in Secrets)
+        # 1. Attempt Upstox Live API First
         upstox_token = st.secrets.get("UPSTOX_ACCESS_TOKEN", None)
         if upstox_token:
             try:
                 clean_ticker = ticker_symbol.upper().replace(".NS", "").strip()
-                # Upstox v2 Historical 5m Candles Endpoint
-                upstox_url = f"https://api.upstox.com/v2/historical-candle/NSE_EQ|{clean_ticker}/5minute/{pd.Timestamp.now().strftime('%Y-%m-%d')}"
+                # Get current date in YYYY-MM-DD
+                today_str = pd.Timestamp.now().strftime('%Y-%m-%d')
+                upstox_url = f"https://api.upstox.com/v2/historical-candle/NSE_EQ|{clean_ticker}/5minute/{today_str}"
                 headers = {
                     'Accept': 'application/json',
                     'Authorization': f'Bearer {upstox_token.strip()}'
                 }
                 res = requests.get(upstox_url, headers=headers, timeout=5)
-                
                 if res.status_code == 200:
                     candles = res.json().get('data', {}).get('candles', [])
                     if candles:
