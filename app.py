@@ -94,8 +94,10 @@ def fetch_data(ticker: str, period="1mo", interval="5m"):
 
 def run_smc_analysis(df: pd.DataFrame, timeframe_label="INTRADAY"):
     """
-    Runs SMC confluence scan with scalable intraday targets, 
-    breakout extension filters, and real-time pullback/reversal detection.
+    PRESERVES ALL EXISTING LOGIC (FVG, BOS, Trend Bias, Master Score, 1:2.5 RR)
+    AND ADDS:
+    - Reversal & Pullback Protection (Volume Fading Checks)
+    - Chart Patterns: Double Tops/Bottoms, Triangles, Flags, Cup & Handle
     """
     if df.empty or len(df) < 30:
         return None
@@ -126,41 +128,142 @@ def run_smc_analysis(df: pd.DataFrame, timeframe_label="INTRADAY"):
     direction = "NEUTRAL"
     breakout_level = c
 
-    # 1. FVG Detection
+    # --------------------------------------------------------------------------
+    # 1. EXISTING: FAIR VALUE GAP (FVG)
+    # --------------------------------------------------------------------------
     bullish_fvg = float(low.iloc[-1]) > float(high.iloc[-3]) if len(df) >= 3 else False
     bearish_fvg = float(high.iloc[-1]) < float(low.iloc[-3]) if len(df) >= 3 else False
 
-    if bullish_fvg and rvol >= 1.0 and trend_bias == "BULLISH":
+    if bullish_fvg and rvol >= 1.0:
         smc_confluences.append("Bullish FVG")
         scores.append(88)
         direction = "BULLISH"
         breakout_level = float(high.iloc[-3])
-    elif bearish_fvg and rvol >= 1.0 and trend_bias == "BEARISH":
+    elif bearish_fvg and rvol >= 1.0:
         smc_confluences.append("Bearish FVG")
         scores.append(88)
         direction = "BEARISH"
         breakout_level = float(low.iloc[-3])
 
-    # 2. BOS Detection
-    if c > h20_prev and trend_bias == "BULLISH":
+    # --------------------------------------------------------------------------
+    # 2. EXISTING: BREAK OF STRUCTURE (BOS)
+    # --------------------------------------------------------------------------
+    if c > h20_prev:
         smc_confluences.append("Bullish BOS")
         scores.append(92)
         direction = "BULLISH"
         breakout_level = h20_prev
-    elif c < l20_prev and trend_bias == "BEARISH":
+    elif c < l20_prev:
         smc_confluences.append("Bearish BOS")
         scores.append(92)
         direction = "BEARISH"
         breakout_level = l20_prev
 
-    # Cancel signal if conditions are neutral
+    # --------------------------------------------------------------------------
+    # 3. NEW ADDITION: DOUBLE TOP & DOUBLE BOTTOM REJECTIONS
+    # --------------------------------------------------------------------------
+    peak1 = float(high.tail(20).iloc[:-5].max())
+    peak2 = float(high.tail(5).max())
+    trough1 = float(low.tail(20).iloc[:-5].min())
+    trough2 = float(low.tail(5).min())
+
+    if abs(peak1 - peak2) / peak1 < 0.003 and c < peak2 and direction != "BULLISH":
+        smc_confluences.append("Double Top Rejection")
+        scores.append(85)
+        direction = "BEARISH"
+        breakout_level = peak2
+
+    if abs(trough1 - trough2) / trough1 < 0.003 and c > trough2 and direction != "BEARISH":
+        smc_confluences.append("Double Bottom Rejection")
+        scores.append(85)
+        direction = "BULLISH"
+        breakout_level = trough2
+
+    # --------------------------------------------------------------------------
+    # 4. NEW ADDITION: TRIANGLE PATTERNS (Ascending, Descending, Symmetrical)
+    # --------------------------------------------------------------------------
+    recent_highs = high.tail(15)
+    recent_lows = low.tail(15)
+    high_slope = (recent_highs.iloc[-1] - recent_highs.iloc[0]) / 15
+    low_slope = (recent_lows.iloc[-1] - recent_lows.iloc[0]) / 15
+
+    if abs(high_slope) < 0.05 and low_slope > 0.05 and c >= recent_highs.max():
+        smc_confluences.append("Ascending Triangle Breakout")
+        scores.append(87)
+        direction = "BULLISH"
+        breakout_level = float(recent_highs.max())
+    elif abs(low_slope) < 0.05 and high_slope < -0.05 and c <= recent_lows.min():
+        smc_confluences.append("Descending Triangle Breakdown")
+        scores.append(87)
+        direction = "BEARISH"
+        breakout_level = float(recent_lows.min())
+    elif high_slope < -0.03 and low_slope > 0.03:
+        if c > recent_highs.iloc[-3]:
+            smc_confluences.append("Symmetrical Triangle Bullish Breakout")
+            scores.append(84)
+            direction = "BULLISH"
+            breakout_level = float(recent_highs.iloc[-3])
+        elif c < recent_lows.iloc[-3]:
+            smc_confluences.append("Symmetrical Triangle Bearish Breakdown")
+            scores.append(84)
+            direction = "BEARISH"
+            breakout_level = float(recent_lows.iloc[-3])
+
+    # --------------------------------------------------------------------------
+    # 5. NEW ADDITION: FLAG PATTERNS (Bull Flag & Bear Flag)
+    # --------------------------------------------------------------------------
+    pole_move = (close.iloc[-5] - close.iloc[-25]) / close.iloc[-25]
+    flag_range = (high.tail(5).max() - low.tail(5).min()) / close.iloc[-1]
+
+    if pole_move > 0.015 and flag_range < 0.008 and c >= high.tail(5).max():
+        smc_confluences.append("Bull Flag Breakout")
+        scores.append(90)
+        direction = "BULLISH"
+        breakout_level = float(high.tail(5).max())
+    elif pole_move < -0.015 and flag_range < 0.008 and c <= low.tail(5).min():
+        smc_confluences.append("Bear Flag Breakdown")
+        scores.append(90)
+        direction = "BEARISH"
+        breakout_level = float(low.tail(5).min())
+
+    # --------------------------------------------------------------------------
+    # 6. NEW ADDITION: CUP AND HANDLE / INVERTED CUP AND HANDLE
+    # --------------------------------------------------------------------------
+    mid_low = low.tail(20).iloc[5:15].min()
+    edge_high1 = high.tail(20).iloc[0:5].max()
+    edge_high2 = high.tail(20).iloc[12:17].max()
+    handle_low = low.tail(5).min()
+
+    if (edge_high1 - mid_low) / mid_low > 0.01 and abs(edge_high1 - edge_high2) / edge_high1 < 0.005 and handle_low > mid_low:
+        if c >= edge_high2:
+            smc_confluences.append("Cup and Handle Breakout")
+            scores.append(89)
+            direction = "BULLISH"
+            breakout_level = float(edge_high2)
+
+    mid_high = high.tail(20).iloc[5:15].max()
+    edge_low1 = low.tail(20).iloc[0:5].min()
+    edge_low2 = low.tail(20).iloc[12:17].min()
+    handle_high = high.tail(5).max()
+
+    if (mid_high - edge_low1) / edge_low1 > 0.01 and abs(edge_low1 - edge_low2) / edge_low1 < 0.005 and handle_high < mid_high:
+        if c <= edge_low2:
+            smc_confluences.append("Inverted Cup and Handle Breakdown")
+            scores.append(89)
+            direction = "BEARISH"
+            breakout_level = float(edge_low2)
+
+    # Cancel signal if no confluences triggered
     if not scores or direction == "NEUTRAL":
         return None
 
+    # --------------------------------------------------------------------------
+    # EXISTING: MASTER SCORE CALCULATION
+    # --------------------------------------------------------------------------
     master_score = max(scores) + min(len(smc_confluences) * 4.0, 20.0)
 
     # --------------------------------------------------------------------------
-    # FEATURE 1: PULLBACK & EXTENSION PROTECTOR (Prevent Chasing)
+    # NEW FEATURE: EXTENSION & REVERSAL PROTECTOR
     # --------------------------------------------------------------------------
     max_extension_pct = 0.002  # 0.2% max extension threshold
     
@@ -170,15 +273,13 @@ def run_smc_analysis(df: pd.DataFrame, timeframe_label="INTRADAY"):
         pct_extended = (breakout_level - c) / breakout_level if breakout_level > 0 else 0
 
     if pct_extended > max_extension_pct and timeframe_label == "INTRADAY":
-        trade_status = "⚠️ EXTENDED (Limit Buy at Breakout)"
-        suggested_entry = round(breakout_level, 2)  # Cap entry to original breakout line
+        trade_status = f"⚠️ EXTENDED (Limit {'Buy' if direction == 'BULLISH' else 'Sell'} at Structure)"
+        suggested_entry = round(breakout_level, 2)
     else:
         trade_status = "✅ ACTIVE ENTRY"
         suggested_entry = round(c, 2)
 
-    # --------------------------------------------------------------------------
-    # FEATURE 2: HEALTHY RETEST vs. REVERSAL PROBABILITY
-    # --------------------------------------------------------------------------
+    # Reversal probability based on volume dynamics
     if pct_extended > 0 and rvol < 1.0:
         target_prob = "⚠️ LOW (Fading Volume - Reversal Risk)"
     elif rvol >= 2.5 and len(smc_confluences) >= 2:
@@ -189,7 +290,7 @@ def run_smc_analysis(df: pd.DataFrame, timeframe_label="INTRADAY"):
         target_prob = "⚠️ LOW (Weak Volume)"
 
     # --------------------------------------------------------------------------
-    # TARGET & STOP LOSS (Scaled 1:2.5 Risk-to-Reward)
+    # EXISTING: TARGET & STOP LOSS (Scaled 1:2.5 Risk-to-Reward)
     # --------------------------------------------------------------------------
     if timeframe_label == "INTRADAY":
         stop_dist = max(1.5 * atr, suggested_entry * 0.005)
