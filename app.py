@@ -34,7 +34,7 @@ def run_smc_analysis(df: pd.DataFrame, timeframe_label="INTRADAY"):
     volume = df['Volume']
 
     # 1. Real-Time Price Resolution
-   c = float(close.dropna().iloc[-1])
+    c = float(close.dropna().iloc[-1])
     h = float(high.dropna().iloc[-1])
     l = float(low.dropna().iloc[-1])
     o = float(open_p.dropna().iloc[-1])
