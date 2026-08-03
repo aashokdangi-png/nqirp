@@ -244,8 +244,8 @@ def run_smc_analysis(df: pd.DataFrame, timeframe_label="INTRADAY"):
 # ==============================================================================
 def run_momentum_leader_analysis(df: pd.DataFrame):
     """
-    Identifies full-day high-momentum trend runners (like Redington, FSL)
-    combining heavy RVOL, percentage gain/loss, and moving average stack alignment.
+    Predictive Multi-Factor Institutional Momentum Scanner Engine.
+    Evaluates Trend Alignment, Volume Acceleration, Daily Breakouts, and Overextension Risk.
     """
     if df.empty or len(df) < 30:
         return None
@@ -262,37 +262,81 @@ def run_momentum_leader_analysis(df: pd.DataFrame):
     
     pct_change = ((c - o_day) / o_day) * 100
 
+    # 1. Volume & RVOL Acceleration
     v20 = float(volume.tail(20).mean())
     v = float(volume.iloc[-1])
     rvol = v / v20 if v20 > 0 else 1.0
+    vol_accel = volume.iloc[-1] > volume.iloc[-2] > volume.iloc[-3] if len(volume) >= 3 else False
+
+    # 2. VWAP & Moving Averages
+    tp = (high + low + close) / 3
+    vwap = float((tp * volume).cumsum().iloc[-1] / volume.cumsum().iloc[-1])
 
     ema9 = float(close.ewm(span=9).mean().iloc[-1])
     ema20 = float(close.ewm(span=20).mean().iloc[-1])
     ema50 = float(close.ewm(span=50).mean().iloc[-1])
 
-    h5_day = float(high.tail(100).max()) if len(df) >= 100 else float(high.max())
-    l5_day = float(low.tail(100).min()) if len(df) >= 100 else float(low.min())
+    # 3. ATR & Multi-Day Breakout References
+    tr = pd.concat([high - low, (high - close.shift(1)).abs(), (low - close.shift(1)).abs()], axis=1).max(axis=1)
+    atr = float(tr.tail(14).mean())
 
-    is_bullish_trend = (c > ema9 > ema20 > ema50) and (pct_change >= 3.0) and (rvol >= 2.0)
-    is_bearish_trend = (c < ema9 < ema20 < ema50) and (pct_change <= -3.0) and (rvol >= 2.0)
+    h20_day = float(high.tail(100).max()) if len(df) >= 100 else float(high.max())
+    is_multi_day_breakout = c >= (h20_day * 0.998)
 
-    if not (is_bullish_trend or is_bearish_trend):
+    # Core Trend Conditions
+    is_bullish = (c > vwap) and (c > ema9 > ema20 > ema50) and (pct_change >= 2.5) and (rvol >= 1.8)
+    is_bearish = (c < vwap) and (c < ema9 < ema20 < ema50) and (pct_change <= -2.5) and (rvol >= 1.8)
+
+    if not (is_bullish or is_bearish):
         return None
 
-    direction = "BULLISH MOMENTUM" if is_bullish_trend else "BEARISH MOMENTUM"
-    breakout_type = "5-Day High Breakout" if c >= h5_day else "Intraday Trend Runner"
-    score = min(70.0 + (abs(pct_change) * 3) + (rvol * 2), 99.0)
+    # 4. PREDICTIVE PROBABILITY SCORE CALCULATION
+    score = 0
+    score += 25 if (c > vwap and c > ema9) else 0
+    score += 25 if (rvol >= 2.5 or vol_accel) else 15
+    score += 15 if abs(pct_change) >= 3.5 else 10
+    score += 20 if is_multi_day_breakout else 5
+    
+    # Check overextension: Penalty if price is > 1.5% away from 9 EMA
+    is_extended = abs(c - ema9) / ema9 > 0.015
+    if not is_extended:
+        score += 15
+    else:
+        score -= 10  # Risk penalty for chasing extended prices
+
+    prob_score = min(max(score, 40), 99)
+
+    direction = "🔥 BULLISH INST. MOMENTUM" if is_bullish else "🩸 BEARISH INST. MOMENTUM"
+    
+    # 5. TRADE EXECUTION LEVELS
+    if is_bullish:
+        suggested_entry = round(max(ema9, vwap), 2) if is_extended else round(c, 2)
+        stop_loss = round(min(ema20, suggested_entry - (1.5 * atr)), 2)
+        risk = suggested_entry - stop_loss
+        target_price = round(suggested_entry + (3.0 * risk), 2)
+        status_msg = "⚠️ Extended (Wait for Pullback to 9 EMA)" if is_extended else "✅ High Probability Entry"
+    else:
+        suggested_entry = round(min(ema9, vwap), 2) if is_extended else round(c, 2)
+        stop_loss = round(max(ema20, suggested_entry + (1.5 * atr)), 2)
+        risk = stop_loss - suggested_entry
+        target_price = round(suggested_entry - (3.0 * risk), 2)
+        status_msg = "⚠️ Extended (Wait for Pullback to 9 EMA)" if is_extended else "✅ High Probability Entry"
+
+    rr_ratio = round(abs(target_price - suggested_entry) / risk, 2) if risk > 0 else 3.0
 
     return {
         "Symbol": df.name if hasattr(df, 'name') else "STOCK",
         "Direction": direction,
         "Day Change %": f"{pct_change:+.2f}%",
         "RVOL": round(rvol, 2),
-        "Momentum Score": round(score, 1),
+        "Predictive Score": f"{prob_score}/100",
+        "Status": status_msg,
         "Current Price": round(c, 2),
-        "EMA Stack Alignment": "Strong Bullish Stack" if is_bullish_trend else "Strong Bearish Stack",
-        "Structural Trigger": breakout_type,
-        "Action Strategy": "Ride Pullbacks to EMA 9/20"
+        "Suggested Entry": suggested_entry,
+        "Stop Loss": stop_loss,
+        "Target Price": target_price,
+        "R/R Ratio": f"1 : {rr_ratio}",
+        "Structural Trigger": "Multi-Day Breakout" if is_multi_day_breakout else "Intraday Range Expansion"
     }
 
 # ==============================================================================
@@ -313,7 +357,7 @@ if page == "⚡ SMC Institutional Scanner":
         "🚀 3. Momentum Leaders of the Day"
     ])
 
-    # ==============================================================================
+# ==============================================================================
     # TAB 1: INTRADAY SMC SCANNER
     # ==============================================================================
     with tab_intraday:
@@ -325,8 +369,8 @@ if page == "⚡ SMC Institutional Scanner":
                 intraday_results = []
                 for symbol in symbols_to_scan:
                     clean_sym = symbol.strip()
-                    df_5m = fetch_data(clean_sym, period="1d", interval="5m")
-                    if not df_5m.empty:
+                    df_5m = fetch_data(clean_sym, period="5d", interval="5m")
+                    if not df_5m.empty and len(df_5m) >= 30:
                         df_5m.name = clean_sym
                         res_5m = run_smc_analysis(df_5m, timeframe_label="INTRADAY")
                         if res_5m:
@@ -353,8 +397,8 @@ if page == "⚡ SMC Institutional Scanner":
                 daily_results = []
                 for symbol in symbols_to_scan:
                     clean_sym = symbol.strip()
-                    df_daily = fetch_data(clean_sym, period="6mo", interval="1d")
-                    if not df_daily.empty:
+                    df_daily = fetch_data(clean_sym, period="1y", interval="1d")
+                    if not df_daily.empty and len(df_daily) >= 30:
                         df_daily.name = clean_sym
                         res_daily = run_smc_analysis(df_daily, timeframe_label="DAILY")
                         if res_daily:
@@ -367,7 +411,7 @@ if page == "⚡ SMC Institutional Scanner":
             df_day = pd.DataFrame(daily_results).sort_values(by="Master Score", ascending=False).reset_index(drop=True)
             st.dataframe(df_day, use_container_width=True)
         else:
-            st.info("Click 'Scan Daily Swing Signals' above to trigger scanning.")
+            st.info("Click 'Scan Daily Swing Signals' above to trigger scanning.")  
 
     # ==============================================================================
     # TAB 3: MOMENTUM LEADERS SCANNER
