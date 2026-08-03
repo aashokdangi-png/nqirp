@@ -9,15 +9,16 @@ import re
 import requests
 
 # Set Page Config
-st.set_page_config(page_title="NQIRP Quant Scanner", layout="wide")
+st.set_page_config(page_title="NQIRP Institutional Quant Engine", layout="wide")
 
 # Sidebar Navigation
 page = st.sidebar.radio(
     "Select Navigation Module",
-    ["📊 Institutional SMC Scanner", "👁️ Vision AI Chart Pattern Scanner"]
+    ["📊 Institutional SMC Intraday Scanner", "👁️ Vision AI Chart Pattern Scanner"],
+    key="nav_sidebar_radio"
 )
 
-# Helper function for yfinance historical market data
+# Helper function for yfinance historical market data (used in Vision Module)
 def fetch_market_data(ticker):
     try:
         sym = ticker if ticker.endswith(".NS") else f"{ticker}.NS"
@@ -30,27 +31,32 @@ def fetch_market_data(ticker):
         return None, ticker
 
 
-# --- MODULE 1: INSTITUTIONAL SMC SCANNER ---
-if page == "📊 Institutional SMC Scanner":
+# ==============================================================================
+# --- MODULE 1: INSTITUTIONAL SMC INTRADAY SCANNER (UPSTOX + YFINANCE 5M) ---
+# ==============================================================================
+if page == "📊 Institutional SMC Intraday Scanner":
     st.title("📊 Institutional SMC Intraday Scanner")
     st.write("Scans real-time 5-minute market structure for Intraday Order Blocks (OB), Fair Value Gaps (FVG), and Volume Spikes.")
 
     col_cfg1, col_cfg2 = st.columns([1, 1])
     with col_cfg1:
-        search_query = st.text_input("🔍 Search Ticker / Filter Universe", "", key="smc_search_input")
+        search_query = st.text_input("🔍 Search Ticker / Filter Universe (e.g. M&M, RELIANCE, SBIN)", "", key="smc_search_input")
     with col_cfg2:
         rvol_threshold = st.slider("Min RVOL Filter", 0.5, 3.0, 1.0, 0.1, key="smc_rvol_slider")
 
+    # Dual-Engine 5-Minute Data Fetcher
     def fetch_intraday_data(ticker_symbol):
         df = None
         data_source = "yFinance Intraday (5m)"
         
-        # 1. Attempt Upstox Live API First
+        # 1. Attempt Upstox Live API First (using token in Secrets)
         upstox_token = st.secrets.get("UPSTOX_ACCESS_TOKEN", None)
         if upstox_token:
             try:
-                upstox_url = f"https://api.upstox.com/v2/historical-candle/NSE_EQ|{ticker_symbol}/5minute/{pd.Timestamp.now().strftime('%Y-%m-%d')}"
-                headers = {'Accept': 'application/json', 'Authorization': f'Bearer {upstox_token}'}
+                # Upstox API v2 Intraday 5m Candle Request
+                clean_ticker = ticker_symbol.upper().replace(".NS", "")
+                upstox_url = f"https://api.upstox.com/v2/historical-candle/NSE_EQ|{clean_ticker}/5minute/{pd.Timestamp.now().strftime('%Y-%m-%d')}"
+                headers = {'Accept': 'application/json', 'Authorization': f'Bearer {upstox_token.strip()}'}
                 res = requests.get(upstox_url, headers=headers, timeout=5)
                 if res.status_code == 200:
                     candles = res.json().get('data', {}).get('candles', [])
@@ -76,53 +82,98 @@ if page == "📊 Institutional SMC Scanner":
 
         return df, data_source
 
+    # SMC Core Quantitative Calculation Engine
+    def analyze_smc_structure(df):
+        if len(df) < 15:
+            return None
+            
+        latest = df.iloc[-1]
+        prev_candles = df.iloc[-15:-1]
+        
+        latest_close = float(latest['Close'])
+        latest_high = float(latest['High'])
+        latest_low = float(latest['Low'])
+        
+        # RVOL Calculation
+        avg_vol = df['Volume'].tail(20).mean()
+        curr_vol = float(latest['Volume'])
+        rvol = round(curr_vol / avg_vol, 2) if avg_vol > 0 else 1.0
+
+        # Order Block (OB) & FVG Identification Logic
+        # Order Block = Lowest low of last 10 candles prior to recent expansion
+        ob_low = prev_candles['Low'].min()
+        ob_high = prev_candles['High'].loc[prev_candles['Low'] == ob_low].iloc[0] if not prev_candles.empty else latest_low
+        
+        # Entry set at 50% Equilibrium (Discount) of the Order Block / Range
+        entry_price = round(ob_low + (latest_high - ob_low) * 0.50, 2)
+        
+        # Stop Loss below OB structural low with 0.15% buffer
+        sl_price = round(ob_low * 0.998, 2)
+        risk = entry_price - sl_price
+        
+        if risk <= 0:
+            sl_price = round(entry_price * 0.996, 2)
+            risk = entry_price - sl_price
+            
+        # Target 1 (2.0x R:R) & Target 2 (3.0x R:R)
+        tp1_price = round(entry_price + (risk * 2.0), 2)
+        tp2_price = round(entry_price + (risk * 3.0), 2)
+        
+        # FVG Check (Gap between Candle 1 High and Candle 3 Low)
+        fvg_detected = "Yes (Bullish)" if (len(df) >= 3 and df['Low'].iloc[-1] > df['High'].iloc[-3]) else "OB Structural"
+        
+        # Confluence AI Score
+        ai_score = min(99, int(75 + (rvol * 8) + (2 if fvg_detected.startswith("Yes") else 0)))
+
+        return {
+            "Close Price": latest_close,
+            "SMC Entry": entry_price,
+            "Target 1 (TP1)": tp1_price,
+            "Target 2 (TP2)": tp2_price,
+            "Stop Loss (SL)": sl_price,
+            "R:R Ratio": "2.0x",
+            "RVOL": rvol,
+            "SMC Structure": fvg_detected,
+            "AI Score": ai_score
+        }
+
     if st.button("🚀 Run Live Intraday Market Scan", key="btn_run_smc_scan"):
         with st.spinner("Scanning 5-minute intraday structure & volume spikes..."):
-            nifty50_tickers = ["M&M", "BAJFINANCE", "BAJAJFINSV", "BHARTIARTL", "HEROMOTOCO", "TITAN", "SBIN", "RELIANCE", "INFY", "TCS"]
-            if search_query:
-                nifty50_tickers = [t.strip().upper() for t in search_query.split(",")]
+            default_universe = ["M&M", "BAJFINANCE", "BAJAJFINSV", "BHARTIARTL", "HEROMOTOCO", "TITAN", "SBIN", "RELIANCE", "INFY", "TCS"]
+            tickers = [t.strip().upper() for t in search_query.split(",")] if search_query.strip() else default_universe
 
             results = []
             
-            for ticker in nifty50_tickers:
+            for ticker in tickers:
                 df_intra, source_used = fetch_intraday_data(ticker)
                 
-                if df_intra is not None and not df_intra.empty and len(df_intra) >= 20:
-                    latest_close = float(df_intra['Close'].iloc[-1])
-                    latest_high = float(df_intra['High'].iloc[-1])
-                    latest_low = float(df_intra['Low'].iloc[-1])
-                    avg_vol = df_intra['Volume'].tail(20).mean()
-                    curr_vol = df_intra['Volume'].iloc[-1]
-                    rvol = round(curr_vol / avg_vol, 2) if avg_vol > 0 else 1.0
-
-                    if rvol >= rvol_threshold:
-                        entry_price = round(latest_low + (latest_high - latest_low) * 0.50, 2)
-                        sl_price = round(latest_low * 0.9965, 2)
-                        risk = entry_price - sl_price
-                        tp1_price = round(entry_price + (risk * 2.0), 2)
-                        
-                        ai_score = int(100 + (rvol * 5))
-
+                if df_intra is not None and not df_intra.empty:
+                    smc_res = analyze_smc_structure(df_intra)
+                    if smc_res and smc_res['RVOL'] >= rvol_threshold:
                         results.append({
                             "Ticker": ticker,
                             "Data Source": source_used,
-                            "AI Score": ai_score,
-                            "Close Price": f"₹{latest_close:,.2f}",
-                            "SMC Entry": f"₹{entry_price:,.2f}",
-                            "Intraday Target (TP1)": f"₹{tp1_price:,.2f}",
-                            "Stop Loss (SL)": f"₹{sl_price:,.2f}",
-                            "R:R Ratio": "2.0x",
-                            "RVOL": rvol
+                            "AI Score": f"{smc_res['AI Score']}%",
+                            "Close Price": f"₹{smc_res['Close Price']:,.2f}",
+                            "SMC Entry": f"₹{smc_res['SMC Entry']:,.2f}",
+                            "Target 1 (TP1)": f"₹{smc_res['Target 1 (TP1)']:,.2f}",
+                            "Target 2 (TP2)": f"₹{smc_res['Target 2 (TP2)']:,.2f}",
+                            "Stop Loss (SL)": f"₹{smc_res['Stop Loss (SL)']:,.2f}",
+                            "R:R Ratio": smc_res['R:R Ratio'],
+                            "RVOL": smc_res['RVOL'],
+                            "Structure": smc_res['SMC Structure']
                         })
 
             if results:
                 st.success(f"✅ Intraday Scan Complete! Found {len(results)} active setups.")
                 st.table(pd.DataFrame(results))
             else:
-                st.warning("No intraday setups matching the selected RVOL threshold were found.")
+                st.warning("No intraday setups matching the selected RVOL threshold were found right now.")
 
 
+# ==============================================================================
 # --- MODULE 2: VISION AI CHARTS SCANNER ---
+# ==============================================================================
 elif page == "👁️ Vision AI Chart Pattern Scanner":
     st.title("👁️ AI Vision + Historical Data Validation Engine")
     st.write("Upload any chart screenshot. Vision AI extracts exact prices & tickers from the image, then validates the trade with historical market data.")
