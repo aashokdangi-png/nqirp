@@ -12,11 +12,14 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Dummy/Placeholder Data Fetcher function (replace with your actual data module/API)
-def fetch_data(symbol, period="1d", interval="5m"):
-    # Ensure this points to your real data fetching pipeline (Upstox / Yahoo Finance / etc.)
-    return pd.DataFrame()
+import yfinance as yf
 
+def fetch_data(symbol, period="1d", interval="5m"):
+    ticker_sym = f"{symbol}.NS" if not symbol.endswith(".NS") else symbol
+    df = yf.download(ticker_sym, period=period, interval=interval, progress=False)
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = df.columns.get_level_values(0)
+    return df
 # ==============================================================================
 # QUANTITATIVE SMC ENGINE (INTRADAY vs DAILY)
 # ==============================================================================
@@ -302,76 +305,97 @@ if page == "⚡ SMC Institutional Scanner":
     st.title("⚡ SMC Institutional Scanner Engine")
     st.markdown("Real-time multi-timeframe quantitative scanning for SMC confluences, FVG, BOS, and Momentum Leaders.")
 
-    # Execute Scanning Loop
     symbols_to_scan = ["REDINGTON", "FIRSTSOURCE", "RELIANCE", "TCS", "INFY", "HDFCBANK", "ICICIBANK"]
-    
-    intraday_results = []
-    daily_results = []
-    momentum_results = []
 
-    for symbol in symbols_to_scan:
-        clean_sym = symbol.strip()
-        upstox_key = f"NSE_EQ|{clean_sym}"
-        
-        # 1. LIVE 5-MINUTE DATA
-        df_5m = fetch_data(symbol, period="1d", interval="5m")
-        if not df_5m.empty:
-            df_5m.name = clean_sym
-            
-            # Intraday SMC Analysis
-            res_5m = run_smc_analysis(df_5m, timeframe_label="INTRADAY")
-            if res_5m:
-                res_5m["Upstox Instrument Key"] = upstox_key
-                intraday_results.append(res_5m)
-                
-            # Intraday Momentum Leader Analysis
-            m_res = run_momentum_leader_analysis(df_5m)
-            if m_res:
-                m_res["Upstox Instrument Key"] = upstox_key
-                momentum_results.append(m_res)
-
-        # 2. HISTORICAL DAILY DATA
-        df_daily = fetch_data(symbol, period="6mo", interval="1d")
-        if not df_daily.empty:
-            df_daily.name = clean_sym
-            res_daily = run_smc_analysis(df_daily, timeframe_label="DAILY")
-            if res_daily:
-                res_daily["Upstox Instrument Key"] = upstox_key
-                daily_results.append(res_daily)
-
-    # Render Tabs
     tab_intraday, tab_daily, tab_momentum = st.tabs([
         "⚡ 1. Live Intraday Results (5-Min Data)", 
         "📊 2. Daily Swing Results (Historical)", 
         "🚀 3. Momentum Leaders of the Day"
     ])
 
+    # ==============================================================================
+    # TAB 1: INTRADAY SMC SCANNER
+    # ==============================================================================
     with tab_intraday:
         st.subheader("⚡ Live Intraday Scanner Results (5-Minute Timeframe)")
         st.caption("Targets updated to enforce a minimum 1:2.5 Risk-to-Reward ratio based on intraday volatility structure.")
+        
+        if st.button("⚡ Scan Intraday SMC Signals", type="primary"):
+            with st.spinner("Scanning 5-minute intraday SMC confluences..."):
+                intraday_results = []
+                for symbol in symbols_to_scan:
+                    clean_sym = symbol.strip()
+                    df_5m = fetch_data(clean_sym, period="1d", interval="5m")
+                    if not df_5m.empty:
+                        df_5m.name = clean_sym
+                        res_5m = run_smc_analysis(df_5m, timeframe_label="INTRADAY")
+                        if res_5m:
+                            res_5m["Upstox Instrument Key"] = f"NSE_EQ|{clean_sym}"
+                            intraday_results.append(res_5m)
+                st.session_state['intraday_results'] = intraday_results
+
+        intraday_results = st.session_state.get('intraday_results', [])
         if intraday_results:
             df_intra = pd.DataFrame(intraday_results).sort_values(by="Master Score", ascending=False).reset_index(drop=True)
             st.dataframe(df_intra, use_container_width=True)
         else:
-            st.info("No active 5-minute intraday SMC confluences triggered right now.")
+            st.info("Click 'Scan Intraday SMC Signals' above to trigger scanning.")
 
+    # ==============================================================================
+    # TAB 2: DAILY SWING SCANNER
+    # ==============================================================================
     with tab_daily:
-        st.subheader("📈 Historical Daily Scanner Results (1-Day Timeframe)")
+        st.subheader("📊 Historical Daily Scanner Results (1-Day Timeframe)")
         st.caption("Optimized for multi-day swing trades based on daily structural breakouts and fair value gaps.")
+        
+        if st.button("📊 Scan Daily Swing Signals", type="primary"):
+            with st.spinner("Scanning daily timeframe SMC confluences..."):
+                daily_results = []
+                for symbol in symbols_to_scan:
+                    clean_sym = symbol.strip()
+                    df_daily = fetch_data(clean_sym, period="6mo", interval="1d")
+                    if not df_daily.empty:
+                        df_daily.name = clean_sym
+                        res_daily = run_smc_analysis(df_daily, timeframe_label="DAILY")
+                        if res_daily:
+                            res_daily["Upstox Instrument Key"] = f"NSE_EQ|{clean_sym}"
+                            daily_results.append(res_daily)
+                st.session_state['daily_results'] = daily_results
+
+        daily_results = st.session_state.get('daily_results', [])
         if daily_results:
             df_day = pd.DataFrame(daily_results).sort_values(by="Master Score", ascending=False).reset_index(drop=True)
             st.dataframe(df_day, use_container_width=True)
         else:
-            st.info("No active daily timeframe SMC confluences found.")
+            st.info("Click 'Scan Daily Swing Signals' above to trigger scanning.")
 
+    # ==============================================================================
+    # TAB 3: MOMENTUM LEADERS SCANNER
+    # ==============================================================================
     with tab_momentum:
         st.subheader("🚀 Institutional Momentum Leaders of the Day")
         st.caption("Filters stocks with >3% intraday move, heavy RVOL (>=2.0), and full EMA 9/20/50 alignment.")
+        
+        if st.button("🚀 Scan Momentum Leaders", type="primary"):
+            with st.spinner("Scanning for high-momentum leaders..."):
+                momentum_results = []
+                for symbol in symbols_to_scan:
+                    clean_sym = symbol.strip()
+                    df_5m = fetch_data(clean_sym, period="1d", interval="5m")
+                    if not df_5m.empty:
+                        df_5m.name = clean_sym
+                        m_res = run_momentum_leader_analysis(df_5m)
+                        if m_res:
+                            m_res["Upstox Instrument Key"] = f"NSE_EQ|{clean_sym}"
+                            momentum_results.append(m_res)
+                st.session_state['momentum_results'] = momentum_results
+
+        momentum_results = st.session_state.get('momentum_results', [])
         if momentum_results:
             df_mom = pd.DataFrame(momentum_results).sort_values(by="Momentum Score", ascending=False).reset_index(drop=True)
             st.dataframe(df_mom, use_container_width=True)
         else:
-            st.info("No stocks currently meet the strict Day Momentum criteria.")
+            st.info("Click 'Scan Momentum Leaders' above to trigger scanning.")
 
 # ==============================================================================
 # VISION AI MODULE
