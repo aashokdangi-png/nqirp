@@ -93,7 +93,10 @@ def fetch_data(ticker: str, period="1mo", interval="5m"):
         return pd.DataFrame()
 
 def run_smc_analysis(df: pd.DataFrame, timeframe_label="INTRADAY"):
-    """Runs SMC confluence scan with scalable intraday targets."""
+    """
+    Runs SMC confluence scan with scalable intraday targets, 
+    breakout extension filters, and real-time pullback/reversal detection.
+    """
     if df.empty or len(df) < 30:
         return None
 
@@ -121,8 +124,9 @@ def run_smc_analysis(df: pd.DataFrame, timeframe_label="INTRADAY"):
 
     smc_confluences, scores = [], []
     direction = "NEUTRAL"
+    breakout_level = c
 
-    # FVG Detection
+    # 1. FVG Detection
     bullish_fvg = float(low.iloc[-1]) > float(high.iloc[-3]) if len(df) >= 3 else False
     bearish_fvg = float(high.iloc[-1]) < float(low.iloc[-3]) if len(df) >= 3 else False
 
@@ -130,53 +134,86 @@ def run_smc_analysis(df: pd.DataFrame, timeframe_label="INTRADAY"):
         smc_confluences.append("Bullish FVG")
         scores.append(88)
         direction = "BULLISH"
+        breakout_level = float(high.iloc[-3])
     elif bearish_fvg and rvol >= 1.0 and trend_bias == "BEARISH":
         smc_confluences.append("Bearish FVG")
         scores.append(88)
         direction = "BEARISH"
+        breakout_level = float(low.iloc[-3])
 
-    # BOS Detection
+    # 2. BOS Detection
     if c > h20_prev and trend_bias == "BULLISH":
         smc_confluences.append("Bullish BOS")
         scores.append(92)
         direction = "BULLISH"
+        breakout_level = h20_prev
     elif c < l20_prev and trend_bias == "BEARISH":
         smc_confluences.append("Bearish BOS")
         scores.append(92)
         direction = "BEARISH"
+        breakout_level = l20_prev
 
+    # Cancel signal if conditions are neutral
     if not scores or direction == "NEUTRAL":
         return None
 
     master_score = max(scores) + min(len(smc_confluences) * 4.0, 20.0)
 
     # --------------------------------------------------------------------------
-    # IMPROVED INTRADAY vs DAILY TARGET & STOP LOSS CALCULATION
+    # FEATURE 1: PULLBACK & EXTENSION PROTECTOR (Prevent Chasing)
+    # --------------------------------------------------------------------------
+    max_extension_pct = 0.002  # 0.2% max extension threshold
+    
+    if direction == "BULLISH":
+        pct_extended = (c - breakout_level) / breakout_level if breakout_level > 0 else 0
+    else:
+        pct_extended = (breakout_level - c) / breakout_level if breakout_level > 0 else 0
+
+    if pct_extended > max_extension_pct and timeframe_label == "INTRADAY":
+        trade_status = "⚠️ EXTENDED (Limit Buy at Breakout)"
+        suggested_entry = round(breakout_level, 2)  # Cap entry to original breakout line
+    else:
+        trade_status = "✅ ACTIVE ENTRY"
+        suggested_entry = round(c, 2)
+
+    # --------------------------------------------------------------------------
+    # FEATURE 2: HEALTHY RETEST vs. REVERSAL PROBABILITY
+    # --------------------------------------------------------------------------
+    if pct_extended > 0 and rvol < 1.0:
+        target_prob = "⚠️ LOW (Fading Volume - Reversal Risk)"
+    elif rvol >= 2.5 and len(smc_confluences) >= 2:
+        target_prob = "🔥 HIGH (Strong Volume & Multi-Confluence)"
+    elif rvol >= 1.2:
+        target_prob = "⚡ MEDIUM (Healthy Volume)"
+    else:
+        target_prob = "⚠️ LOW (Weak Volume)"
+
+    # --------------------------------------------------------------------------
+    # TARGET & STOP LOSS (Scaled 1:2.5 Risk-to-Reward)
     # --------------------------------------------------------------------------
     if timeframe_label == "INTRADAY":
-        # Tight Stop Loss based on 5m ATR (1.5x 5m ATR)
-        stop_dist = max(1.5 * atr, c * 0.005) # Min 0.5% Stop Loss
-        # Scaled Intraday Target (Target 1:2.5 Risk-to-Reward minimum)
+        stop_dist = max(1.5 * atr, suggested_entry * 0.005)
         target_dist = stop_dist * 2.5 
     else:
-        # Daily Swing Setup: Larger swing distance based on Daily ATR
         stop_dist = 1.0 * atr
         target_dist = 2.5 * atr
 
-    stop_loss = round(c - stop_dist if direction == "BULLISH" else c + stop_dist, 2)
-    target_price = round(c + target_dist if direction == "BULLISH" else c - target_dist, 2)
+    stop_loss = round(suggested_entry - stop_dist if direction == "BULLISH" else suggested_entry + stop_dist, 2)
+    target_price = round(suggested_entry + target_dist if direction == "BULLISH" else suggested_entry - target_dist, 2)
 
     return {
         "Symbol": df.name if hasattr(df, 'name') else "STOCK",
         "Direction": direction,
         "Master Score": round(master_score, 1),
-        "SMC Signals": ", ".join(smc_confluences),
-        "Entry Price": round(c, 2),
+        "Trade Action": trade_status,
+        "Target Probability": target_prob,
+        "Suggested Entry": suggested_entry,
+        "Current Price": round(c, 2),
         "Target Price": target_price,
         "Stop Loss": stop_loss,
         "R/R Ratio": "1 : 2.5",
         "RVOL": round(rvol, 2),
-        "ATR (5m)" if timeframe_label == "INTRADAY" else "ATR (Daily)": round(atr, 2)
+        "SMC Signals": ", ".join(smc_confluences)
     }
 
 # ==============================================================================
