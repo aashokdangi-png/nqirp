@@ -85,19 +85,7 @@ if page == "📊 Institutional SMC Intraday Scanner":
                 df = None
 
         return df, data_source
-        if df is None or df.empty:
-            try:
-                sym = ticker_symbol if ticker_symbol.endswith(".NS") else f"{ticker_symbol}.NS"
-                ticker_obj = yf.Ticker(sym)
-                df = ticker_obj.history(period="5d", interval="5m")
-                if not df.empty:
-                    df = df.reset_index()
-                    data_source = "yFinance Intraday (5m)"
-            except Exception:
-                df = None
-
-        return df, data_source
-
+       
     # Full Colab SMC Core Quantitative Engine
     def analyze_smc_structure(df):
         if len(df) < 10:
