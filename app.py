@@ -1,97 +1,25 @@
 import streamlit as st
-import yfinance as yf
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 from PIL import Image
-import io
-import re
-import requests
+import os
 
-# ==============================================================================
-# PAGE CONFIGURATION
-# ==============================================================================
-st.set_page_config(page_title="NQIRP Institutional Quant Engine", layout="wide")
-
-# ==============================================================================
-# UPSTOX INSTRUMENT RESOLUTION & MAPPING ENGINE
-# ==============================================================================
-@st.cache_data(ttl=86400)
-def load_upstox_instrument_map():
-    """
-    Downloads and indexes the official Upstox Complete Instrument CSV.
-    Provides seamless mapping between standard Symbols and exact Upstox Instrument Keys.
-    """
-    url = "https://assets.upstox.com/market-quote/instruments/exchange/complete.csv.gz"
-    try:
-        df = pd.read_csv(url, compression='gzip', low_memory=False)
-        df_filtered = df[df['exchange'].isin(['NSE_EQ', 'NSE_FO'])].copy()
-        
-        mapping = {}
-        for _, row in df_filtered.iterrows():
-            trading_symbol = str(row.get('trading_symbol', '')).strip().upper()
-            inst_key = str(row.get('instrument_key', '')).strip()
-            if trading_symbol and inst_key:
-                mapping[trading_symbol] = inst_key
-                clean_sym = trading_symbol.split('-')[0]
-                if clean_sym not in mapping:
-                    mapping[clean_sym] = inst_key
-                    
-        return mapping, df_filtered
-    except Exception as e:
-        st.warning(f"Unable to load online Upstox Instrument Master. Error: {e}")
-        return {}, pd.DataFrame()
-
-upstox_map, upstox_df = load_upstox_instrument_map()
-
-def resolve_upstox_key(symbol: str) -> str:
-    """Resolves a ticker/symbol to its official Upstox Instrument Key."""
-    clean_sym = symbol.replace('.NS', '').strip().upper()
-    return upstox_map.get(clean_sym, f"NSE_EQ|{clean_sym}")
-
-# Sidebar Upstox Key Resolution Status
-st.sidebar.markdown("### 🔌 Feed Integration")
-if upstox_map:
-    st.sidebar.success(f"Upstox Instruments Loaded ({len(upstox_map):,} keys mapped)")
-else:
-    st.sidebar.info("Using Fallback Symbol Format for Feeds")
-
-# ==============================================================================
-# NAVIGATION
-# ==============================================================================
-page = st.sidebar.radio(
-    "Select Navigation Module",
-    ["📊 Dual-Engine SMC Scanner (Live & Daily)", "👁️ Vision AI Chart Pattern Scanner"],
-    key="nav_sidebar_radio"
+st.set_page_config(
+    page_title="NQIRP Institutional Quant Engine",
+    page_icon="⚡",
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
 
-DEFAULT_SYMBOLS = [
-    "ADANIENT.NS", "ADANIPORTS.NS", "APOLLOHOSP.NS", "ASIANPAINT.NS", "AXISBANK.NS",
-    "BAJAJ-AUTO.NS", "BAJFINANCE.NS", "BAJAJFINSV.NS", "BEL.NS", "BHARTIARTL.NS",
-    "CIPLA.NS", "COALINDIA.NS", "DRREDDY.NS", "EICHERMOT.NS", "GRASIM.NS",
-    "HCLTECH.NS", "HDFCBANK.NS", "HDFCLIFE.NS", "HEROMOTOCO.NS", "HINDALCO.NS",
-    "HINDUNILVR.NS", "ICICIBANK.NS", "ITC.NS", "INDUSINDBK.NS", "INFY.NS",
-    "JSWSTEEL.NS", "JIOFIN.NS", "KOTAKBANK.NS", "LT.NS", "M&M.NS",
-    "MARUTI.NS", "NESTLEIND.NS", "NTPC.NS", "ONGC.NS", "POWERGRID.NS",
-    "RELIANCE.NS", "SBILIFE.NS", "SHRIRAMFIN.NS", "SBIN.NS", "SUNPHARMA.NS",
-    "TCS.NS", "TATACONSUM.NS", "TATASTEEL.NS", "TECHM.NS", "TITAN.NS",
-    "TRENT.NS", "ULTRACEMCO.NS", "WIPRO.NS"
-]
+# Dummy/Placeholder Data Fetcher function (replace with your actual data module/API)
+def fetch_data(symbol, period="1d", interval="5m"):
+    # Ensure this points to your real data fetching pipeline (Upstox / Yahoo Finance / etc.)
+    return pd.DataFrame()
 
 # ==============================================================================
-# HELPER DATA FETCHING & ANALYSIS FUNCTIONS
+# QUANTITATIVE SMC ENGINE (INTRADAY vs DAILY)
 # ==============================================================================
-def fetch_data(ticker: str, period="1mo", interval="5m"):
-    """Fetches stock data for specified interval."""
-    try:
-        sym = ticker if ticker.endswith(".NS") else f"{ticker}.NS"
-        df = yf.download(sym, period=period, interval=interval, auto_adjust=True, progress=False)
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.get_level_values(0)
-        return df.dropna(subset=['Close'])
-    except Exception:
-        return pd.DataFrame()
-
 def run_smc_analysis(df: pd.DataFrame, timeframe_label="INTRADAY"):
     if df.empty or len(df) < 30:
         return None
@@ -102,7 +30,7 @@ def run_smc_analysis(df: pd.DataFrame, timeframe_label="INTRADAY"):
     open_p = df['Open']
     volume = df['Volume']
 
-    # FIX 1: Prioritize explicit LTP to prevent stale close/settlement price mismatches
+    # 1. Real-Time Price Resolution
     l_price = float(df['LTP'].iloc[-1]) if 'LTP' in df.columns else float(close.iloc[-1])
     c, h, l, o, v = l_price, float(high.iloc[-1]), float(low.iloc[-1]), float(open_p.iloc[-1]), float(volume.iloc[-1])
 
@@ -277,7 +205,6 @@ def run_smc_analysis(df: pd.DataFrame, timeframe_label="INTRADAY"):
     if direction == "BULLISH":
         stop_loss = round(suggested_entry - stop_dist, 2)
         raw_target = suggested_entry + raw_target_dist
-        # FIX 2: Cap target at resistance if raw target exceeds key structural high
         if raw_target > h20_prev and h20_prev > suggested_entry:
             target_price = round(h20_prev * 0.9995, 2)
         else:
@@ -285,7 +212,6 @@ def run_smc_analysis(df: pd.DataFrame, timeframe_label="INTRADAY"):
     else:
         stop_loss = round(suggested_entry + stop_dist, 2)
         raw_target = suggested_entry - raw_target_dist
-        # FIX 2: Cap target at support if raw target drops below key structural low
         if raw_target < l20_prev and l20_prev < suggested_entry:
             target_price = round(l20_prev * 1.0005, 2)
         else:
@@ -311,58 +237,141 @@ def run_smc_analysis(df: pd.DataFrame, timeframe_label="INTRADAY"):
     }
 
 # ==============================================================================
-# QUANTITATIVE SMC ENGINE (INTRADAY vs DAILY)
+# 🚀 INSTITUTIONAL MOMENTUM SCANNER ENGINE
 # ==============================================================================
-if page == "📊 Dual-Engine SMC Scanner (Live & Daily)":
-    st.title("📊 Dual-Engine Quantitative SMC Scanner")
-    st.markdown("Generates **two separate results**: Real-time Intraday momentum (5-Min candles) & Historical Swing setups (Daily candles).")
+def run_momentum_leader_analysis(df: pd.DataFrame):
+    """
+    Identifies full-day high-momentum trend runners (like Redington, FSL)
+    combining heavy RVOL, percentage gain/loss, and moving average stack alignment.
+    """
+    if df.empty or len(df) < 30:
+        return None
 
-    if st.button("🚀 Run Dual Scan (Live & Daily)", use_container_width=True):
-        with st.spinner("Fetching Live (5m) and Historical (Daily) Data..."):
-            intraday_results = []
-            daily_results = []
+    close = df['Close']
+    high = df['High']
+    low = df['Low']
+    open_p = df['Open']
+    volume = df['Volume']
 
-            for symbol in DEFAULT_SYMBOLS:
-                clean_sym = symbol.replace(".NS", "")
-                upstox_key = resolve_upstox_key(symbol)
+    l_price = float(df['LTP'].iloc[-1]) if 'LTP' in df.columns else float(close.iloc[-1])
+    c = l_price
+    o_day = float(open_p.iloc[0])
+    
+    pct_change = ((c - o_day) / o_day) * 100
 
-                # 1. INTRADAY LIVE DATA (5-Minute Candles)
-                df_5m = fetch_data(symbol, period="5d", interval="5m")
-                if not df_5m.empty:
-                    df_5m.name = clean_sym
-                    res_5m = run_smc_analysis(df_5m, timeframe_label="INTRADAY")
-                    if res_5m:
-                        res_5m["Upstox Instrument Key"] = upstox_key
-                        intraday_results.append(res_5m)
+    v20 = float(volume.tail(20).mean())
+    v = float(volume.iloc[-1])
+    rvol = v / v20 if v20 > 0 else 1.0
 
-                # 2. HISTORICAL DAILY DATA (Daily Candles)
-                df_daily = fetch_data(symbol, period="6mo", interval="1d")
-                if not df_daily.empty:
-                    df_daily.name = clean_sym
-                    res_daily = run_smc_analysis(df_daily, timeframe_label="DAILY")
-                    if res_daily:
-                        res_daily["Upstox Instrument Key"] = upstox_key
-                        daily_results.append(res_daily)
+    ema9 = float(close.ewm(span=9).mean().iloc[-1])
+    ema20 = float(close.ewm(span=20).mean().iloc[-1])
+    ema50 = float(close.ewm(span=50).mean().iloc[-1])
 
-            tab_intraday, tab_daily = st.tabs(["⚡ 1. Live Intraday Results (5-Min Data)", "📈 2. Daily Swing Results (Historical Daily Data)"])
+    h5_day = float(high.tail(100).max()) if len(df) >= 100 else float(high.max())
+    l5_day = float(low.tail(100).min()) if len(df) >= 100 else float(low.min())
 
-            with tab_intraday:
-                st.subheader("⚡ Live Intraday Scanner Results (5-Minute Timeframe)")
-                st.caption("Targets updated to enforce a minimum 1:2.5 Risk-to-Reward ratio based on intraday volatility structure.")
-                if intraday_results:
-                    df_intra = pd.DataFrame(intraday_results).sort_values(by="Master Score", ascending=False).reset_index(drop=True)
-                    st.dataframe(df_intra, use_container_width=True)
-                else:
-                    st.info("No active 5-minute intraday SMC confluences triggered right now.")
+    is_bullish_trend = (c > ema9 > ema20 > ema50) and (pct_change >= 3.0) and (rvol >= 2.0)
+    is_bearish_trend = (c < ema9 < ema20 < ema50) and (pct_change <= -3.0) and (rvol >= 2.0)
 
-            with tab_daily:
-                st.subheader("📈 Historical Daily Scanner Results (1-Day Timeframe)")
-                st.caption("Optimized for multi-day swing trades based on daily structural breakouts and fair value gaps.")
-                if daily_results:
-                    df_day = pd.DataFrame(daily_results).sort_values(by="Master Score", ascending=False).reset_index(drop=True)
-                    st.dataframe(df_day, use_container_width=True)
-                else:
-                    st.info("No active daily timeframe SMC confluences found.")
+    if not (is_bullish_trend or is_bearish_trend):
+        return None
+
+    direction = "BULLISH MOMENTUM" if is_bullish_trend else "BEARISH MOMENTUM"
+    breakout_type = "5-Day High Breakout" if c >= h5_day else "Intraday Trend Runner"
+    score = min(70.0 + (abs(pct_change) * 3) + (rvol * 2), 99.0)
+
+    return {
+        "Symbol": df.name if hasattr(df, 'name') else "STOCK",
+        "Direction": direction,
+        "Day Change %": f"{pct_change:+.2f}%",
+        "RVOL": round(rvol, 2),
+        "Momentum Score": round(score, 1),
+        "Current Price": round(c, 2),
+        "EMA Stack Alignment": "Strong Bullish Stack" if is_bullish_trend else "Strong Bearish Stack",
+        "Structural Trigger": breakout_type,
+        "Action Strategy": "Ride Pullbacks to EMA 9/20"
+    }
+
+# ==============================================================================
+# STREAMLIT APP NAVIGATION & UI
+# ==============================================================================
+st.sidebar.title("NQIRP Navigation")
+page = st.sidebar.radio("Select Module", ["⚡ SMC Institutional Scanner", "👁️ Vision AI Chart Pattern Scanner"])
+
+if page == "⚡ SMC Institutional Scanner":
+    st.title("⚡ SMC Institutional Scanner Engine")
+    st.markdown("Real-time multi-timeframe quantitative scanning for SMC confluences, FVG, BOS, and Momentum Leaders.")
+
+    # Execute Scanning Loop
+    symbols_to_scan = ["REDINGTON", "FIRSTSOURCE", "RELIANCE", "TCS", "INFY", "HDFCBANK", "ICICIBANK"]
+    
+    intraday_results = []
+    daily_results = []
+    momentum_results = []
+
+    for symbol in symbols_to_scan:
+        clean_sym = symbol.strip()
+        upstox_key = f"NSE_EQ|{clean_sym}"
+        
+        # 1. LIVE 5-MINUTE DATA
+        df_5m = fetch_data(symbol, period="1d", interval="5m")
+        if not df_5m.empty:
+            df_5m.name = clean_sym
+            
+            # Intraday SMC Analysis
+            res_5m = run_smc_analysis(df_5m, timeframe_label="INTRADAY")
+            if res_5m:
+                res_5m["Upstox Instrument Key"] = upstox_key
+                intraday_results.append(res_5m)
+                
+            # Intraday Momentum Leader Analysis
+            m_res = run_momentum_leader_analysis(df_5m)
+            if m_res:
+                m_res["Upstox Instrument Key"] = upstox_key
+                momentum_results.append(m_res)
+
+        # 2. HISTORICAL DAILY DATA
+        df_daily = fetch_data(symbol, period="6mo", interval="1d")
+        if not df_daily.empty:
+            df_daily.name = clean_sym
+            res_daily = run_smc_analysis(df_daily, timeframe_label="DAILY")
+            if res_daily:
+                res_daily["Upstox Instrument Key"] = upstox_key
+                daily_results.append(res_daily)
+
+    # Render Tabs
+    tab_intraday, tab_daily, tab_momentum = st.tabs([
+        "⚡ 1. Live Intraday Results (5-Min Data)", 
+        "📊 2. Daily Swing Results (Historical)", 
+        "🚀 3. Momentum Leaders of the Day"
+    ])
+
+    with tab_intraday:
+        st.subheader("⚡ Live Intraday Scanner Results (5-Minute Timeframe)")
+        st.caption("Targets updated to enforce a minimum 1:2.5 Risk-to-Reward ratio based on intraday volatility structure.")
+        if intraday_results:
+            df_intra = pd.DataFrame(intraday_results).sort_values(by="Master Score", ascending=False).reset_index(drop=True)
+            st.dataframe(df_intra, use_container_width=True)
+        else:
+            st.info("No active 5-minute intraday SMC confluences triggered right now.")
+
+    with tab_daily:
+        st.subheader("📈 Historical Daily Scanner Results (1-Day Timeframe)")
+        st.caption("Optimized for multi-day swing trades based on daily structural breakouts and fair value gaps.")
+        if daily_results:
+            df_day = pd.DataFrame(daily_results).sort_values(by="Master Score", ascending=False).reset_index(drop=True)
+            st.dataframe(df_day, use_container_width=True)
+        else:
+            st.info("No active daily timeframe SMC confluences found.")
+
+    with tab_momentum:
+        st.subheader("🚀 Institutional Momentum Leaders of the Day")
+        st.caption("Filters stocks with >3% intraday move, heavy RVOL (>=2.0), and full EMA 9/20/50 alignment.")
+        if momentum_results:
+            df_mom = pd.DataFrame(momentum_results).sort_values(by="Momentum Score", ascending=False).reset_index(drop=True)
+            st.dataframe(df_mom, use_container_width=True)
+        else:
+            st.info("No stocks currently meet the strict Day Momentum criteria.")
 
 # ==============================================================================
 # VISION AI MODULE
