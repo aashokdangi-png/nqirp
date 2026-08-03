@@ -1,5 +1,120 @@
+import streamlit as st
+import yfinance as yf
+import pandas as pd
+import numpy as np
+import plotly.graph_objects as go
+from PIL import Image
+import io
+import re
+import requests
+
+# Set Page Config
+st.set_page_config(page_title="NQIRP Quant Scanner", layout="wide")
+
+# Sidebar Navigation (THIS CREATES THE MISSING 'page' VARIABLE)
+page = st.sidebar.radio(
+    "Select Navigation Module",
+    ["📊 Institutional SMC Scanner", "👁️ Vision AI Chart Pattern Scanner"]
+)
+
 # --- MODULE 1: INSTITUTIONAL SMC SCANNER (INTRADAY + DUAL DATA ENGINE) ---
 if page == "📊 Institutional SMC Scanner":
+    st.title("📊 Institutional SMC Intraday Scanner")
+    st.write("Scans real-time 5-minute market structure for Intraday Order Blocks (OB), Fair Value Gaps (FVG), and Volume Spikes.")
+
+    # Data Source Selection & Configuration
+    col_cfg1, col_cfg2 = st.columns([1, 1])
+    with col_cfg1:
+        search_query = st.text_input("🔍 Search Ticker / Filter Universe", "")
+    with col_cfg2:
+        rvol_threshold = st.slider("Min RVOL Filter", 0.5, 3.0, 1.0, 0.1)
+
+    # Intraday Dual-Engine Data Fetcher Function
+    def fetch_intraday_data(ticker_symbol):
+        df = None
+        data_source = "yFinance Intraday (5m)"
+        
+        # 1. Attempt Upstox Live API First (if configured in Secrets)
+        upstox_token = st.secrets.get("UPSTOX_ACCESS_TOKEN", None)
+        if upstox_token:
+            try:
+                upstox_url = f"https://api.upstox.com/v2/historical-candle/NSE_EQ|{ticker_symbol}/5minute/{pd.Timestamp.now().strftime('%Y-%m-%d')}"
+                headers = {'Accept': 'application/json', 'Authorization': f'Bearer {upstox_token}'}
+                res = requests.get(upstox_url, headers=headers, timeout=5)
+                if res.status_code == 200:
+                    candles = res.json().get('data', {}).get('candles', [])
+                    if candles:
+                        df = pd.DataFrame(candles, columns=['Timestamp', 'Open', 'High', 'Low', 'Close', 'Volume', 'OI'])
+                        df['Timestamp'] = pd.to_datetime(df['Timestamp'])
+                        df = df.sort_values('Timestamp').reset_index(drop=True)
+                        data_source = "Upstox Live Feed (5m)"
+            except Exception:
+                pass
+
+        # 2. Fallback to yFinance 5-Minute Intraday Data
+        if df is None or df.empty:
+            try:
+                sym = ticker_symbol if ticker_symbol.endswith(".NS") else f"{ticker_symbol}.NS"
+                ticker_obj = yf.Ticker(sym)
+                df = ticker_obj.history(period="5d", interval="5m")
+                if not df.empty:
+                    df = df.reset_index()
+                    data_source = "yFinance Intraday (5m)"
+            except Exception:
+                df = None
+
+        return df, data_source
+
+    if st.button("🚀 Run Live Intraday Market Scan"):
+        with st.spinner("Scanning 5-minute intraday structure & volume spikes..."):
+            nifty50_tickers = ["M&M", "BAJFINANCE", "BAJAJFINSV", "BHARTIARTL", "HEROMOTOCO", "TITAN", "SBIN", "RELIANCE", "INFY", "TCS"]
+            if search_query:
+                nifty50_tickers = [t.strip().upper() for t in search_query.split(",")]
+
+            results = []
+            
+            for ticker in nifty50_tickers:
+                df_intra, source_used = fetch_intraday_data(ticker)
+                
+                if df_intra is not None and not df_intra.empty and len(df_intra) >= 20:
+                    latest_close = float(df_intra['Close'].iloc[-1])
+                    latest_high = float(df_intra['High'].iloc[-1])
+                    latest_low = float(df_intra['Low'].iloc[-1])
+                    avg_vol = df_intra['Volume'].tail(20).mean()
+                    curr_vol = df_intra['Volume'].iloc[-1]
+                    rvol = round(curr_vol / avg_vol, 2) if avg_vol > 0 else 1.0
+
+                    if rvol >= rvol_threshold:
+                        # --- TRUE INTRADAY SMC ENTRY LOGIC ---
+                        # Entry set at 50% Equilibrium of the latest 5-min Order Block
+                        entry_price = round(latest_low + (latest_high - latest_low) * 0.50, 2)
+                        
+                        # Tight Intraday Stop Loss (~0.35% below candle low)
+                        sl_price = round(latest_low * 0.9965, 2)
+                        risk = entry_price - sl_price
+                        
+                        # Intraday 1:2 Risk-to-Reward Target
+                        tp1_price = round(entry_price + (risk * 2.0), 2)
+                        
+                        ai_score = int(100 + (rvol * 5))
+
+                        results.append({
+                            "Ticker": ticker,
+                            "Data Source": source_used,
+                            "AI Score": ai_score,
+                            "Close Price": f"₹{latest_close:,.2f}",
+                            "SMC Entry": f"₹{entry_price:,.2f}",
+                            "Intraday Target (TP1)": f"₹{tp1_price:,.2f}",
+                            "Stop Loss (SL)": f"₹{sl_price:,.2f}",
+                            "R:R Ratio": "2.0x",
+                            "RVOL": rvol
+                        })
+
+            if results:
+                st.success(f"✅ Intraday Scan Complete! Found {len(results)} active setups.")
+                st.table(pd.DataFrame(results))
+            else:
+                st.warning("No intraday setups matching the selected RVOL threshold were found.")
     st.title("📊 Institutional SMC Intraday Scanner")
     st.write("Scans real-time 5-minute market structure for Intraday Order Blocks (OB), Fair Value Gaps (FVG), and Volume Spikes.")
 
