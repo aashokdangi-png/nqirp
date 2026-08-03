@@ -34,9 +34,11 @@ def run_smc_analysis(df: pd.DataFrame, timeframe_label="INTRADAY"):
     volume = df['Volume']
 
     # 1. Real-Time Price Resolution
-    l_price = float(df['LTP'].iloc[-1]) if 'LTP' in df.columns else float(close.iloc[-1])
-    c, h, l, o, v = l_price, float(high.iloc[-1]), float(low.iloc[-1]), float(open_p.iloc[-1]), float(volume.iloc[-1])
-
+   c = float(close.dropna().iloc[-1])
+    h = float(high.dropna().iloc[-1])
+    l = float(low.dropna().iloc[-1])
+    o = float(open_p.dropna().iloc[-1])
+    v = float(volume.dropna().iloc[-1])
     v20 = float(volume.tail(20).mean())
     rvol = v / v20 if v20 > 0 else 1.0
 
