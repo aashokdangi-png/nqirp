@@ -49,10 +49,7 @@ def load_upstox_instrument_map():
 upstox_map, upstox_df = load_upstox_instrument_map()
 
 def resolve_upstox_key(symbol: str) -> str:
-    """
-    Resolves a ticker/symbol to its official Upstox Instrument Key.
-    Handles '.NS' extension stripping for NSE symbols.
-    """
+    """Resolves a ticker/symbol to its official Upstox Instrument Key."""
     clean_sym = symbol.replace('.NS', '').strip().upper()
     return upstox_map.get(clean_sym, f"NSE_EQ|{clean_sym}")
 
@@ -64,27 +61,13 @@ else:
     st.sidebar.info("Using Fallback Symbol Format for Feeds")
 
 # ==============================================================================
-# SIDEBAR NAVIGATION
+# NAVIGATION
 # ==============================================================================
 page = st.sidebar.radio(
     "Select Navigation Module",
-    ["📊 Institutional SMC Intraday Scanner", "👁️ Vision AI Chart Pattern Scanner"],
+    ["📊 Dual-Engine SMC Scanner (Live & Daily)", "👁️ Vision AI Chart Pattern Scanner"],
     key="nav_sidebar_radio"
 )
-
-# ==============================================================================
-# HELPER DATA FETCHING FUNCTIONS
-# ==============================================================================
-def fetch_market_data(ticker: str):
-    """Fetches market historical data with yfinance fallback."""
-    try:
-        sym = ticker if ticker.endswith(".NS") else f"{ticker}.NS"
-        df = yf.download(sym, period="6mo", interval="1d", auto_adjust=True, progress=False)
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.get_level_values(0)
-        return df.dropna(subset=['Close'])
-    except Exception:
-        return pd.DataFrame()
 
 # Standard Nifty / F&O Universe
 DEFAULT_SYMBOLS = [
@@ -101,95 +84,149 @@ DEFAULT_SYMBOLS = [
 ]
 
 # ==============================================================================
-# QUANTITATIVE SMC & PATTERN SCANNER MODULE
+# HELPER DATA FETCHING & ANALYSIS FUNCTIONS
 # ==============================================================================
-if page == "📊 Institutional SMC Intraday Scanner":
-    st.title("📊 Institutional SMC & Quantitative Intraday Scanner")
-    st.markdown("Automated Market Structure, Fair Value Gap (FVG), Break of Structure (BOS), and Liquidity Sweep Detector.")
+def fetch_data(ticker: str, period="1 mo", interval="5m"):
+    """Fetches stock data for specified interval."""
+    try:
+        sym = ticker if ticker.endswith(".NS") else f"{ticker}.NS"
+        df = yf.download(sym, period=period, interval=interval, auto_adjust=True, progress=False)
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
+        return df.dropna(subset=['Close'])
+    except Exception:
+        return pd.DataFrame()
 
-    st.subheader("⚙️ Live Multi-Asset Scan")
-    
-    if st.button("🚀 Run Institutional Scanner", use_container_width=True):
-        with st.spinner("Fetching market data and running quantitative SMC analysis..."):
-            results = []
-            
+def run_smc_analysis(df: pd.DataFrame, timeframe_label="INTRADAY"):
+    """Runs SMC confluence scan on the provided dataframe."""
+    if df.empty or len(df) < 30:
+        return None
+
+    close = df['Close']
+    high = df['High']
+    low = df['Low']
+    open_p = df['Open']
+    volume = df['Volume']
+
+    c, h, l, o, v = float(close.iloc[-1]), float(high.iloc[-1]), float(low.iloc[-1]), float(open_p.iloc[-1]), float(volume.iloc[-1])
+
+    v20 = float(volume.tail(20).mean())
+    rvol = v / v20 if v20 > 0 else 1.0
+
+    tr = pd.concat([high - low, (high - close.shift(1)).abs(), (low - close.shift(1)).abs()], axis=1).max(axis=1)
+    atr = float(tr.tail(14).mean())
+    if atr <= 0:
+        return None
+
+    ema50 = float(close.ewm(span=50).mean().iloc[-1])
+    trend_bias = "BULLISH" if c > ema50 else "BEARISH"
+
+    h20_prev = float(high.tail(21).iloc[:-1].max())
+    l20_prev = float(low.tail(21).iloc[:-1].min())
+
+    smc_confluences, scores = [], []
+    direction = "NEUTRAL"
+
+    # FVG Detection
+    bullish_fvg = float(low.iloc[-1]) > float(high.iloc[-3]) if len(df) >= 3 else False
+    bearish_fvg = float(high.iloc[-1]) < float(low.iloc[-3]) if len(df) >= 3 else False
+
+    if bullish_fvg and rvol >= 1.0 and trend_bias == "BULLISH":
+        smc_confluences.append("Bullish FVG")
+        scores.append(88)
+        direction = "BULLISH"
+    elif bearish_fvg and rvol >= 1.0 and trend_bias == "BEARISH":
+        smc_confluences.append("Bearish FVG")
+        scores.append(88)
+        direction = "BEARISH"
+
+    # BOS Detection
+    if c > h20_prev and trend_bias == "BULLISH":
+        smc_confluences.append("Bullish BOS")
+        scores.append(92)
+        direction = "BULLISH"
+    elif c < l20_prev and trend_bias == "BEARISH":
+        smc_confluences.append("Bearish BOS")
+        scores.append(92)
+        direction = "BEARISH"
+
+    if not scores or direction == "NEUTRAL":
+        return None
+
+    master_score = max(scores) + min(len(smc_confluences) * 4.0, 20.0)
+
+    # Risk Management Targets (Dynamic multiplier based on Intraday vs Daily)
+    target_mult = 1.5 if timeframe_label == "INTRADAY" else 2.5
+    stop_dist = 1.0 * atr
+    stop_loss = round(c - stop_dist if direction == "BULLISH" else c + stop_dist, 2)
+    target_price = round(c + (target_mult * stop_dist) if direction == "BULLISH" else c - (target_mult * stop_dist), 2)
+
+    return {
+        "Symbol": df.name if hasattr(df, 'name') else "STOCK",
+        "Direction": direction,
+        "Master Score": round(master_score, 1),
+        "SMC Signals": ", ".join(smc_confluences),
+        "Entry Price": round(c, 2),
+        "Target Price": target_price,
+        "Stop Loss": stop_loss,
+        "RVOL": round(rvol, 2),
+        "ATR": round(atr, 2)
+    }
+
+# ==============================================================================
+# QUANTITATIVE SMC ENGINE (INTRADAY vs DAILY)
+# ==============================================================================
+if page == "📊 Dual-Engine SMC Scanner (Live & Daily)":
+    st.title("📊 Dual-Engine Quantitative SMC Scanner")
+    st.markdown("Generates **two separate results**: Real-time Intraday momentum (5-Min candles) & Historical Swing setups (Daily candles).")
+
+    if st.button("🚀 Run Dual Scan (Live & Daily)", use_container_width=True):
+        with st.spinner("Fetching Live (5m) and Historical (Daily) Data..."):
+            intraday_results = []
+            daily_results = []
+
             for symbol in DEFAULT_SYMBOLS:
-                df = fetch_market_data(symbol)
-                if df.empty or len(df) < 50:
-                    continue
-
-                close = df['Close']
-                high = df['High']
-                low = df['Low']
-                open_p = df['Open']
-                volume = df['Volume']
-
-                c, h, l, o, v = float(close.iloc[-1]), float(high.iloc[-1]), float(low.iloc[-1]), float(open_p.iloc[-1]), float(volume.iloc[-1])
-
-                v20 = float(volume.tail(20).mean())
-                rvol = v / v20 if v20 > 0 else 1.0
-                tr = pd.concat([high - low, (high - close.shift(1)).abs(), (low - close.shift(1)).abs()], axis=1).max(axis=1)
-                atr = float(tr.tail(14).mean())
-                if atr <= 0: continue
-
-                ema50 = float(close.ewm(span=50).mean().iloc[-1])
-                trend_bias = "BULLISH" if c > ema50 else "BEARISH"
-
-                h20_prev = float(high.tail(21).iloc[:-1].max())
-                l20_prev = float(low.tail(21).iloc[:-1].min())
-
-                smc_confluences, scores = [], []
-                direction = "NEUTRAL"
-
-                bullish_fvg = float(low.iloc[-1]) > float(high.iloc[-3]) if len(df) >= 3 else False
-                bearish_fvg = float(high.iloc[-1]) < float(low.iloc[-3]) if len(df) >= 3 else False
-
-                if bullish_fvg and rvol >= 1.2 and trend_bias == "BULLISH":
-                    smc_confluences.append("Bullish FVG")
-                    scores.append(88)
-                    direction = "BULLISH"
-                elif bearish_fvg and rvol >= 1.2 and trend_bias == "BEARISH":
-                    smc_confluences.append("Bearish FVG")
-                    scores.append(88)
-                    direction = "BEARISH"
-
-                if c > h20_prev and trend_bias == "BULLISH":
-                    smc_confluences.append("Bullish BOS")
-                    scores.append(92)
-                    direction = "BULLISH"
-                elif c < l20_prev and trend_bias == "BEARISH":
-                    smc_confluences.append("Bearish BOS")
-                    scores.append(92)
-                    direction = "BEARISH"
-
-                if not scores or direction == "NEUTRAL":
-                    continue
-
-                master_score = max(scores) + min(len(smc_confluences) * 4.0, 20.0)
+                clean_sym = symbol.replace(".NS", "")
                 upstox_key = resolve_upstox_key(symbol)
 
-                # Target & Risk Parameters
-                stop_dist = 1.0 * atr
-                stop_loss = round(c - stop_dist if direction == "BULLISH" else c + stop_dist, 2)
-                target_price = round(c + (2.5 * stop_dist) if direction == "BULLISH" else c - (2.5 * stop_dist), 2)
+                # --- 1. INTRADAY LIVE DATA (5-Minute Candles) ---
+                df_5m = fetch_data(symbol, period="5d", interval="5m")
+                if not df_5m.empty:
+                    df_5m.name = clean_sym
+                    res_5m = run_smc_analysis(df_5m, timeframe_label="INTRADAY")
+                    if res_5m:
+                        res_5m["Upstox Instrument Key"] = upstox_key
+                        intraday_results.append(res_5m)
 
-                results.append({
-                    "Symbol": symbol.replace(".NS", ""),
-                    "Upstox Instrument Key": upstox_key,
-                    "Direction": direction,
-                    "Master Score": round(master_score, 1),
-                    "SMC Signals": ", ".join(smc_confluences),
-                    "Entry Price": round(c, 2),
-                    "Target Price": target_price,
-                    "Stop Loss": stop_loss,
-                    "RVOL": round(rvol, 2)
-                })
+                # --- 2. HISTORICAL DAILY DATA (Daily Candles) ---
+                df_daily = fetch_data(symbol, period="6mo", interval="1d")
+                if not df_daily.empty:
+                    df_daily.name = clean_sym
+                    res_daily = run_smc_analysis(df_daily, timeframe_label="DAILY")
+                    if res_daily:
+                        res_daily["Upstox Instrument Key"] = upstox_key
+                        daily_results.append(res_daily)
 
-            if results:
-                res_df = pd.DataFrame(results).sort_values(by="Master Score", ascending=False).reset_index(drop=True)
-                st.dataframe(res_df, use_container_width=True)
-            else:
-                st.info("No stocks matched the strict SMC confluence criteria at this moment.")
+            # Display Tabbed / Dual Output View
+            tab_intraday, tab_daily = st.tabs(["⚡ 1. Live Intraday Results (5-Min Data)", "📈 2. Daily Swing Results (Historical Daily Data)"])
+
+            with tab_intraday:
+                st.subheader("⚡ Live Intraday Scanner Results (5-Minute Timeframe)")
+                st.caption("Optimized for same-day trades. Focus on setups with RVOL >= 1.0.")
+                if intraday_results:
+                    df_intra = pd.DataFrame(intraday_results).sort_values(by="Master Score", ascending=False).reset_index(drop=True)
+                    st.dataframe(df_intra, use_container_width=True)
+                else:
+                    st.info("No active 5-minute intraday SMC confluences triggered right now.")
+
+            with tab_daily:
+                st.subheader("📈 Historical Daily Scanner Results (1-Day Timeframe)")
+                st.caption("Optimized for multi-day swing trades based on daily structural breakouts and fair value gaps.")
+                if daily_results:
+                    df_day = pd.DataFrame(daily_results).sort_values(by="Master Score", ascending=False).reset_index(drop=True)
+                    st.dataframe(df_day, use_container_width=True)
+                else:
+                    st.info("No active daily timeframe SMC confluences found.")
 
 # ==============================================================================
 # VISION AI MODULE
