@@ -47,16 +47,24 @@ if page == "📊 Institutional SMC Intraday Scanner":
     # Dual-Engine 5-Minute Data Fetcher
     def fetch_intraday_data(ticker_symbol):
         df = None
+       # Dual-Engine 5-Minute Data Fetcher
+    def fetch_intraday_data(ticker_symbol):
+        df = None
         data_source = "yFinance Intraday (5m)"
         
         # 1. Attempt Upstox Live API First (using token in Secrets)
         upstox_token = st.secrets.get("UPSTOX_ACCESS_TOKEN", None)
         if upstox_token:
             try:
-                clean_ticker = ticker_symbol.upper().replace(".NS", "")
+                clean_ticker = ticker_symbol.upper().replace(".NS", "").strip()
+                # Upstox v2 Historical 5m Candles Endpoint
                 upstox_url = f"https://api.upstox.com/v2/historical-candle/NSE_EQ|{clean_ticker}/5minute/{pd.Timestamp.now().strftime('%Y-%m-%d')}"
-                headers = {'Accept': 'application/json', 'Authorization': f'Bearer {upstox_token.strip()}'}
+                headers = {
+                    'Accept': 'application/json',
+                    'Authorization': f'Bearer {upstox_token.strip()}'
+                }
                 res = requests.get(upstox_url, headers=headers, timeout=5)
+                
                 if res.status_code == 200:
                     candles = res.json().get('data', {}).get('candles', [])
                     if candles:
@@ -68,6 +76,18 @@ if page == "📊 Institutional SMC Intraday Scanner":
                 pass
 
         # 2. Fallback to yFinance 5-Minute Intraday Data
+        if df is None or df.empty:
+            try:
+                sym = ticker_symbol if ticker_symbol.endswith(".NS") else f"{ticker_symbol}.NS"
+                ticker_obj = yf.Ticker(sym)
+                df = ticker_obj.history(period="5d", interval="5m")
+                if not df.empty:
+                    df = df.reset_index()
+                    data_source = "yFinance Intraday (5m)"
+            except Exception:
+                df = None
+
+        return df, data_source
         if df is None or df.empty:
             try:
                 sym = ticker_symbol if ticker_symbol.endswith(".NS") else f"{ticker_symbol}.NS"
