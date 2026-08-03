@@ -25,17 +25,14 @@ def load_upstox_instrument_map():
     url = "https://assets.upstox.com/market-quote/instruments/exchange/complete.csv.gz"
     try:
         df = pd.read_csv(url, compression='gzip', low_memory=False)
-        # Filter down to Equity & F&O segments on NSE
         df_filtered = df[df['exchange'].isin(['NSE_EQ', 'NSE_FO'])].copy()
         
-        # Create mapping dictionary: Symbol/Trading Symbol -> Instrument Key
         mapping = {}
         for _, row in df_filtered.iterrows():
             trading_symbol = str(row.get('trading_symbol', '')).strip().upper()
             inst_key = str(row.get('instrument_key', '')).strip()
             if trading_symbol and inst_key:
                 mapping[trading_symbol] = inst_key
-                # Also map clean base symbols without suffix
                 clean_sym = trading_symbol.split('-')[0]
                 if clean_sym not in mapping:
                     mapping[clean_sym] = inst_key
@@ -45,7 +42,6 @@ def load_upstox_instrument_map():
         st.warning(f"Unable to load online Upstox Instrument Master. Error: {e}")
         return {}, pd.DataFrame()
 
-# Initialize Upstox Mapping Dictionary
 upstox_map, upstox_df = load_upstox_instrument_map()
 
 def resolve_upstox_key(symbol: str) -> str:
@@ -69,7 +65,6 @@ page = st.sidebar.radio(
     key="nav_sidebar_radio"
 )
 
-# Standard Nifty / F&O Universe
 DEFAULT_SYMBOLS = [
     "ADANIENT.NS", "ADANIPORTS.NS", "APOLLOHOSP.NS", "ASIANPAINT.NS", "AXISBANK.NS",
     "BAJAJ-AUTO.NS", "BAJFINANCE.NS", "BAJAJFINSV.NS", "BEL.NS", "BHARTIARTL.NS",
@@ -86,7 +81,7 @@ DEFAULT_SYMBOLS = [
 # ==============================================================================
 # HELPER DATA FETCHING & ANALYSIS FUNCTIONS
 # ==============================================================================
-def fetch_data(ticker: str, period="1 mo", interval="5m"):
+def fetch_data(ticker: str, period="1mo", interval="5m"):
     """Fetches stock data for specified interval."""
     try:
         sym = ticker if ticker.endswith(".NS") else f"{ticker}.NS"
@@ -98,7 +93,7 @@ def fetch_data(ticker: str, period="1 mo", interval="5m"):
         return pd.DataFrame()
 
 def run_smc_analysis(df: pd.DataFrame, timeframe_label="INTRADAY"):
-    """Runs SMC confluence scan on the provided dataframe."""
+    """Runs SMC confluence scan with scalable intraday targets."""
     if df.empty or len(df) < 30:
         return None
 
@@ -155,11 +150,21 @@ def run_smc_analysis(df: pd.DataFrame, timeframe_label="INTRADAY"):
 
     master_score = max(scores) + min(len(smc_confluences) * 4.0, 20.0)
 
-    # Risk Management Targets (Dynamic multiplier based on Intraday vs Daily)
-    target_mult = 1.5 if timeframe_label == "INTRADAY" else 2.5
-    stop_dist = 1.0 * atr
+    # --------------------------------------------------------------------------
+    # IMPROVED INTRADAY vs DAILY TARGET & STOP LOSS CALCULATION
+    # --------------------------------------------------------------------------
+    if timeframe_label == "INTRADAY":
+        # Tight Stop Loss based on 5m ATR (1.5x 5m ATR)
+        stop_dist = max(1.5 * atr, c * 0.005) # Min 0.5% Stop Loss
+        # Scaled Intraday Target (Target 1:2.5 Risk-to-Reward minimum)
+        target_dist = stop_dist * 2.5 
+    else:
+        # Daily Swing Setup: Larger swing distance based on Daily ATR
+        stop_dist = 1.0 * atr
+        target_dist = 2.5 * atr
+
     stop_loss = round(c - stop_dist if direction == "BULLISH" else c + stop_dist, 2)
-    target_price = round(c + (target_mult * stop_dist) if direction == "BULLISH" else c - (target_mult * stop_dist), 2)
+    target_price = round(c + target_dist if direction == "BULLISH" else c - target_dist, 2)
 
     return {
         "Symbol": df.name if hasattr(df, 'name') else "STOCK",
@@ -169,8 +174,9 @@ def run_smc_analysis(df: pd.DataFrame, timeframe_label="INTRADAY"):
         "Entry Price": round(c, 2),
         "Target Price": target_price,
         "Stop Loss": stop_loss,
+        "R/R Ratio": "1 : 2.5",
         "RVOL": round(rvol, 2),
-        "ATR": round(atr, 2)
+        "ATR (5m)" if timeframe_label == "INTRADAY" else "ATR (Daily)": round(atr, 2)
     }
 
 # ==============================================================================
@@ -189,7 +195,7 @@ if page == "📊 Dual-Engine SMC Scanner (Live & Daily)":
                 clean_sym = symbol.replace(".NS", "")
                 upstox_key = resolve_upstox_key(symbol)
 
-                # --- 1. INTRADAY LIVE DATA (5-Minute Candles) ---
+                # 1. INTRADAY LIVE DATA (5-Minute Candles)
                 df_5m = fetch_data(symbol, period="5d", interval="5m")
                 if not df_5m.empty:
                     df_5m.name = clean_sym
@@ -198,7 +204,7 @@ if page == "📊 Dual-Engine SMC Scanner (Live & Daily)":
                         res_5m["Upstox Instrument Key"] = upstox_key
                         intraday_results.append(res_5m)
 
-                # --- 2. HISTORICAL DAILY DATA (Daily Candles) ---
+                # 2. HISTORICAL DAILY DATA (Daily Candles)
                 df_daily = fetch_data(symbol, period="6mo", interval="1d")
                 if not df_daily.empty:
                     df_daily.name = clean_sym
@@ -207,12 +213,11 @@ if page == "📊 Dual-Engine SMC Scanner (Live & Daily)":
                         res_daily["Upstox Instrument Key"] = upstox_key
                         daily_results.append(res_daily)
 
-            # Display Tabbed / Dual Output View
             tab_intraday, tab_daily = st.tabs(["⚡ 1. Live Intraday Results (5-Min Data)", "📈 2. Daily Swing Results (Historical Daily Data)"])
 
             with tab_intraday:
                 st.subheader("⚡ Live Intraday Scanner Results (5-Minute Timeframe)")
-                st.caption("Optimized for same-day trades. Focus on setups with RVOL >= 1.0.")
+                st.caption("Targets updated to enforce a minimum 1:2.5 Risk-to-Reward ratio based on intraday volatility structure.")
                 if intraday_results:
                     df_intra = pd.DataFrame(intraday_results).sort_values(by="Master Score", ascending=False).reset_index(drop=True)
                     st.dataframe(df_intra, use_container_width=True)
