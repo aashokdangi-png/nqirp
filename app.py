@@ -47,9 +47,6 @@ if page == "📊 Institutional SMC Intraday Scanner":
     # Dual-Engine 5-Minute Data Fetcher
     def fetch_intraday_data(ticker_symbol):
         df = None
-       # Dual-Engine 5-Minute Data Fetcher
-    def fetch_intraday_data(ticker_symbol):
-        df = None
         data_source = "yFinance Intraday (5m)"
         
         # 1. Attempt Upstox Live API First (using token in Secrets)
