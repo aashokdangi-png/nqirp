@@ -439,25 +439,82 @@ if page == "⚡ SMC Institutional Scanner":
         "⚡ Intraday SMC", "📈 Swing Signals", "🚀 Momentum Leaders", "🧠 Meta-Contrarian Engine"
     ])
 
-    # 1. INTRADAY SMC TAB
+    # --- TAB 1: INTRADAY SMC ---
     with tab_intraday:
-        st.markdown("### ⚡ Intraday SMC Scanner")
-        if st.button("⚡ Run Intraday SMC Scan", key="btn_intraday_scan"):
-            st.info("Running Intraday SMC Scan...")
+        st.subheader("⚡ Intraday SMC Scanner Engine")
+        if st.button("⚡ Run Intraday SMC Scan", type="primary", key="btn_intraday_scan"):
+            with st.spinner("Scanning intraday SMC confluences..."):
+                intraday_results = []
+                for symbol in symbols_to_scan:
+                    clean_sym = symbol.strip()
+                    df_data = fetch_data(clean_sym, period="1d", interval="5m")
+                    if not df_data.empty and len(df_data) >= 30:
+                        df_data.name = clean_sym
+                        res = run_smc_analysis(df_data, timeframe_label="INTRADAY")
+                        if res:
+                            intraday_results.append(res)
+                st.session_state['intraday_results'] = intraday_results
 
-    # 2. SWING SIGNALS TAB
+        res_intraday = st.session_state.get('intraday_results', [])
+        if res_intraday:
+            df_intra = pd.DataFrame(res_intraday)
+            if "Master Score" in df_intra.columns:
+                df_intra = df_intra.sort_values(by="Master Score", ascending=False)
+            st.dataframe(df_intra.reset_index(drop=True), use_container_width=True)
+        else:
+            st.info("Click 'Run Intraday SMC Scan' above to scan symbols.")
+
+    # --- TAB 2: SWING SIGNALS ---
     with tab_swing:
-        st.markdown("### 📈 Swing Signals Scanner")
-        if st.button("📈 Run Swing Scan", key="btn_swing_scan"):
-            st.info("Running Swing Signals Scan...")
+        st.subheader("📈 Swing Signals Engine")
+        if st.button("📈 Run Swing Scan", type="primary", key="btn_swing_scan"):
+            with st.spinner("Scanning daily swing SMC setups..."):
+                swing_results = []
+                for symbol in symbols_to_scan:
+                    clean_sym = symbol.strip()
+                    df_data = fetch_data(clean_sym, period="1mo", interval="1d")
+                    if not df_data.empty and len(df_data) >= 30:
+                        df_data.name = clean_sym
+                        res = run_smc_analysis(df_data, timeframe_label="DAILY")
+                        if res:
+                            swing_results.append(res)
+                st.session_state['swing_results'] = swing_results
 
-    # 3. MOMENTUM LEADERS TAB
+        res_swing = st.session_state.get('swing_results', [])
+        if res_swing:
+            df_sw = pd.DataFrame(res_swing)
+            if "Master Score" in df_sw.columns:
+                df_sw = df_sw.sort_values(by="Master Score", ascending=False)
+            st.dataframe(df_sw.reset_index(drop=True), use_container_width=True)
+        else:
+            st.info("Click 'Run Swing Scan' above to scan symbols.")
+
+    # --- TAB 3: MOMENTUM LEADERS ---
     with tab_momentum:
-        st.markdown("### 🚀 Momentum Leaders Scanner")
-        if st.button("🚀 Scan Momentum Leaders", key="btn_momentum_scan"):
-            st.info("Scanning Momentum Leaders...")
+        st.subheader("🚀 Institutional Momentum Leaders Engine")
+        if st.button("🚀 Scan Momentum Leaders", type="primary", key="btn_momentum_scan"):
+            with st.spinner("Scanning momentum leaders..."):
+                mom_results = []
+                for symbol in symbols_to_scan:
+                    clean_sym = symbol.strip()
+                    df_data = fetch_data(clean_sym, period="5d", interval="5m")
+                    if not df_data.empty and len(df_data) >= 35:
+                        df_data.name = clean_sym
+                        m_res = run_momentum_leader_analysis(df_data)
+                        if m_res:
+                            mom_results.append(m_res)
+                st.session_state['mom_results'] = mom_results
 
-    # 4. META-CONTRARIAN TAB
+        res_mom = st.session_state.get('mom_results', [])
+        if res_mom:
+            df_m = pd.DataFrame(res_mom)
+            if "Predictive Score" in df_m.columns:
+                df_m = df_m.sort_values(by="Predictive Score", ascending=False)
+            st.dataframe(df_m.reset_index(drop=True), use_container_width=True)
+        else:
+            st.info("Click 'Scan Momentum Leaders' above to scan symbols.")
+
+    # --- TAB 4: META-CONTRARIAN ENGINE ---
     with tab_contrarian:
         st.subheader("🧠 Meta-Contrarian & Crowd Exhaustion Re-Ranker")
         st.caption("Filters standard momentum signals by penalizing overcrowded, overextended, or volume-climax setups.")
@@ -482,9 +539,6 @@ if page == "⚡ SMC Institutional Scanner":
             st.dataframe(df_c.reset_index(drop=True), use_container_width=True)
         else:
             st.info("Click 'Run Meta-Contrarian Audit' above to evaluate setups.")
-
-    # [Tabs 1, 2, and 3 remain exactly as they were above]
-
     # ==============================================================================
     # TAB 4: META-CONTRARIAN ENGINE
     # ==============================================================================
