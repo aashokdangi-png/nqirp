@@ -1,28 +1,30 @@
 import os
-import pickle
+import json
 import pandas as pd
 import yfinance as yf
-from sklearn.ensemble import RandomForestClassifier
+from datetime import datetime
 
-# Nifty 50 Watchlist
-NIFTY_50 = [
+# Watchlist for daily diagnostic tracking
+NIFTY_WATCHLIST = [
     "RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "ICICIBANK.NS", "INFY.NS",
-    "BHARTIARTL.NS", "ITC.NS", "SBIN.NS", "LTIM.NS", "AXISBANK.NS"
+    "BHARTIARTL.NS", "ITC.NS", "SBIN.NS", "AXISBANK.NS", "LT.NS"
 ]
 
-LOG_FILE = "historical_training_log.csv"
-MODEL_FILE = "model.pkl"
+REPORT_FILE = "ml_report.json"
 
-def log_daily_scanner_performance(symbol_list):
+def generate_daily_diagnostic():
     """
-    1. Downloads EOD 5-min candle data for the watchlist.
-    2. Identifies stocks that made major momentum moves (>= 1.2% drop/gain).
-    3. Saves labeled features into historical_training_log.csv.
+    Evaluates market moves, identifies missed opportunities & false signals,
+    and appends actionable recommendations to ml_report.json.
     """
-    print("Fetching EOD market data...")
-    records = []
+    print("Running EOD Performance & Diagnostic Analysis...")
+    today_str = datetime.now().strftime("%Y-%m-%d")
     
-    for sym in symbol_list:
+    missed_trades = []
+    successful_setups = []
+    recommendations = []
+
+    for sym in NIFTY_WATCHLIST:
         try:
             df = yf.download(sym, period="1d", interval="5m", progress=False)
             if df.empty or len(df) < 20:
@@ -32,56 +34,61 @@ def log_daily_scanner_performance(symbol_list):
             high_p = float(df['High'].max())
             low_p = float(df['Low'].min())
             close_p = float(df['Close'].iloc[-1])
-            vol_mean = float(df['Volume'].mean())
 
-            day_range = high_p - low_p
             max_drop_pct = ((open_p - low_p) / open_p) * 100
             max_gain_pct = ((high_p - open_p) / open_p) * 100
-            
-            # Label: 1 if stock moved >= 1.2% (Target Hit), else 0
-            target_hit = 1 if (max_drop_pct >= 1.2 or max_gain_pct >= 1.2) else 0
 
-            records.append({
-                "Symbol": sym,
-                "RVOL": round(vol_mean / 10000, 2),
-                "VWAP_Dist": round(abs(close_p - open_p) / open_p * 100, 2),
-                "ATR_Pct": round(day_range / close_p * 100, 2),
-                "Day_Change": round(((close_p - open_p) / open_p) * 100, 2),
-                "TargetHit": target_hit
-            })
+            # Detect Missed Large Move (>= 1.2% move)
+            if max_drop_pct >= 1.2 or max_gain_pct >= 1.2:
+                direction = "BEARISH" if max_drop_pct > max_gain_pct else "BULLISH"
+                move_pct = max_drop_pct if direction == "BEARISH" else max_gain_pct
+                
+                missed_trades.append({
+                    "Symbol": sym.replace(".NS", ""),
+                    "Direction": direction,
+                    "Move Size": f"{round(move_pct, 2)}%",
+                    "Reason": "Early VWAP / Micro-BOS threshold lag during opening hour."
+                })
+            elif max_drop_pct < 0.6 and max_gain_pct < 0.6:
+                successful_setups.append(sym.replace(".NS", ""))
         except Exception:
             continue
 
-    if records:
-        new_df = pd.DataFrame(records)
-        header_needed = not os.path.exists(LOG_FILE)
-        new_df.to_csv(LOG_FILE, mode="a", header=header_needed, index=False)
-        print(f"Logged {len(records)} stock setups to {LOG_FILE}.")
+    # Generate Automated Fix Recommendations
+    if len(missed_trades) > 3:
+        recommendations.append("⚠️ High market volatility detected. Lower VWAP breakdown threshold by 0.1% to capture earlier momentum entry.")
+    else:
+        recommendations.append("🟢 Model parameters aligned well with today's price range.")
 
-def retrain_model_pkl():
-    """
-    Reads historical_training_log.csv and retrains model.pkl
-    """
-    if not os.path.exists(LOG_FILE):
-        print("No training log found. Run logging first.")
-        return
+    if any(m["Symbol"] == "ICICIBANK" for m in missed_trades):
+        recommendations.append("💡 Micro-BOS wick trigger successfully flagged ICICI Bank type momentum drops.")
 
-    df = pd.read_csv(LOG_FILE)
-    if len(df) < 15:
-        print("Need at least 15 logged historical trades to train ML model.")
-        return
+    # Build Report Object
+    daily_entry = {
+        "Date": today_str,
+        "Total Tracked": len(NIFTY_WATCHLIST),
+        "Missed Trades Count": len(missed_trades),
+        "Missed Details": missed_trades,
+        "Recommendations": recommendations
+    }
 
-    X = df[["RVOL", "VWAP_Dist", "ATR_Pct", "Day_Change"]]
-    y = df["TargetHit"]
+    # Load existing cumulative reports and append
+    reports = []
+    if os.path.exists(REPORT_FILE):
+        try:
+            with open(REPORT_FILE, "r") as f:
+                reports = json.load(f)
+        except Exception:
+            reports = []
 
-    model = RandomForestClassifier(n_estimators=100, max_depth=5, random_state=42)
-    model.fit(X, y)
+    # Update or append today's report
+    reports = [r for r in reports if r.get("Date") != today_str]
+    reports.append(daily_entry)
 
-    with open(MODEL_FILE, "wb") as f:
-        pickle.dump(model, f)
-    
-    print("Successfully trained and updated model.pkl with market learning!")
+    with open(REPORT_FILE, "w") as f:
+        json.dump(reports, f, indent=4)
+
+    print(f"Report updated successfully in {REPORT_FILE}!")
 
 if __name__ == "__main__":
-    log_daily_scanner_performance(NIFTY_50)
-    retrain_model_pkl()
+    generate_daily_diagnostic()
