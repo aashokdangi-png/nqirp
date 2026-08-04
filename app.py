@@ -67,107 +67,113 @@ def fetch_data(symbol, period="1d", interval="5m"):
 # QUANTITATIVE SMC ENGINE (INTRADAY vs DAILY)
 # ==============================================================================
 def run_smc_analysis(df: pd.DataFrame, timeframe_label="INTRADAY"):
+    """
+    SMC Institutional Analysis Engine with Early Momentum Triggers, RSI Safeguard, and ML Inference.
+    Does NOT alter existing UI schemas or table structures.
+    """
     if df.empty or len(df) < 30:
         return None
 
-    close = df['Close']
-    high = df['High']
-    low = df['Low']
-    open_p = df['Open']
-    volume = df['Volume']
+    close = df['Close'].dropna()
+    high = df['High'].dropna()
+    low = df['Low'].dropna()
+    open_p = df['Open'].dropna()
+    volume = df['Volume'].dropna()
 
-    # 1. Real-Time Price Resolution
-    c = float(close.dropna().iloc[-1])
-    h = float(high.dropna().iloc[-1])
-    l = float(low.dropna().iloc[-1])
-    o = float(open_p.dropna().iloc[-1])
-    v = float(volume.dropna().iloc[-1])
-    v20 = float(volume.tail(20).mean())
-    rvol = v / v20 if v20 > 0 else 1.0
-
-    tr = pd.concat([high - low, (high - close.shift(1)).abs(), (low - close.shift(1)).abs()], axis=1).max(axis=1)
-    atr = float(tr.tail(14).mean())
-    if atr <= 0:
+    if len(close) < 20:
         return None
 
+    c = float(close.iloc[-1])
+    h = float(high.iloc[-1])
+    l = float(low.iloc[-1])
+    o = float(open_p.iloc[-1])
+    v = float(volume.iloc[-1])
+
+    # 1. Volatility & Indicators
+    tr = pd.concat([high - low, (high - close.shift(1)).abs(), (low - close.shift(1)).abs()], axis=1).max(axis=1)
+    atr = float(tr.tail(14).mean())
+    if atr <= 0 or np.isnan(atr):
+        return None
+
+    # RSI (14) Calculation (Safety Guard)
+    delta = close.diff()
+    gain = (delta.where(delta > 0, 0)).rolling(14).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
+    rs = gain / loss.replace(0, 1e-9)
+    rsi_series = 100 - (100 / (1 + rs))
+    rsi = float(rsi_series.dropna().iloc[-1]) if not rsi_series.dropna().empty else 50.0
+
+    # Volume & VWAP
+    v20 = float(volume.tail(20).mean())
+    rvol = v / v20 if v20 > 0 else 1.0
     ema20 = float(close.ewm(span=20).mean().iloc[-1])
     ema50 = float(close.ewm(span=50).mean().iloc[-1])
-    trend_bias = "BULLISH" if c > ema50 else "BEARISH"
-
-    h20_prev = float(high.tail(25).iloc[:-5].max())
-    l20_prev = float(low.tail(25).iloc[:-5].min())
+    vwap = float((volume * (high + low + close) / 3).cumsum().iloc[-1] / volume.cumsum().iloc[-1]) if volume.sum() > 0 else c
 
     smc_confluences, scores = [], []
     direction = "NEUTRAL"
-    breakout_level = c
 
-    # Lookback window: 5 daily candles for Daily Swing, 1 candle for Intraday
-    lookback = 5 if timeframe_label == "DAILY" else 1
-
-    # 1. FAIR VALUE GAP (FVG)
-    bullish_fvg = any(float(low.iloc[-i]) > float(high.iloc[-i-2]) for i in range(1, lookback+1)) if len(df) >= lookback+2 else False
-    bearish_fvg = any(float(high.iloc[-i]) < float(low.iloc[-i-2]) for i in range(1, lookback+1)) if len(df) >= lookback+2 else False
-
-    if bullish_fvg and (rvol >= 0.8 or timeframe_label == "DAILY"):
-        smc_confluences.append("Bullish FVG Zone")
-        scores.append(88)
-        direction = "BULLISH"
-        breakout_level = float(high.iloc[-3])
-    elif bearish_fvg and (rvol >= 0.8 or timeframe_label == "DAILY"):
-        smc_confluences.append("Bearish FVG Zone")
-        scores.append(88)
+    # 2. EARLY MOMENTUM TRIGGER 1: VWAP Cross (Catches early moves at 1,450+)
+    if c < vwap and close.iloc[-2] >= vwap and (o - c) > (atr * 0.4):
+        smc_confluences.append("Early VWAP Breakdown Cross")
+        scores.append(90)
         direction = "BEARISH"
-        breakout_level = float(low.iloc[-3])
-
-    # 2. BREAK OF STRUCTURE (BOS)
-    recent_max = float(high.tail(lookback).max())
-    recent_min = float(low.tail(lookback).min())
-
-    if recent_max > h20_prev and c >= ema20:
-        smc_confluences.append("Bullish BOS Breakout")
-        scores.append(92)
+    elif c > vwap and close.iloc[-2] <= vwap and (c - o) > (atr * 0.4):
+        smc_confluences.append("Early VWAP Bullish Cross")
+        scores.append(90)
         direction = "BULLISH"
-        breakout_level = h20_prev
-    elif recent_min < l20_prev and c <= ema20:
-        smc_confluences.append("Bearish BOS Breakdown")
+
+    # 3. EARLY MOMENTUM TRIGGER 2: Micro-BOS Wick Sweep
+    l3_prev = float(low.tail(4).iloc[:-1].min())
+    h3_prev = float(high.tail(4).iloc[:-1].max())
+
+    if c < l3_prev and direction == "NEUTRAL":
+        smc_confluences.append("Micro-BOS Wick Breakdown")
+        scores.append(85)
+        direction = "BEARISH"
+    elif c > h3_prev and direction == "NEUTRAL":
+        smc_confluences.append("Micro-BOS Wick Breakout")
+        scores.append(85)
+        direction = "BULLISH"
+
+    # 4. Fallback Standard Structural BOS
+    h20_prev = float(high.tail(25).iloc[:-5].max())
+    l20_prev = float(low.tail(25).iloc[:-5].min())
+    if c < l20_prev and direction == "NEUTRAL":
+        smc_confluences.append("Bearish Structural BOS")
         scores.append(92)
         direction = "BEARISH"
-        breakout_level = l20_prev
-
-    # 3. SWING PULLBACK / SUPPORT REACTION
-    if timeframe_label == "DAILY" and direction == "NEUTRAL":
-        if c > ema50 and abs(c - ema20) / ema20 <= 0.02:
-            smc_confluences.append("20 EMA Swing Pullback Support")
-            scores.append(82)
-            direction = "BULLISH"
-            breakout_level = ema20
-        elif c < ema50 and abs(c - ema20) / ema20 <= 0.02:
-            smc_confluences.append("20 EMA Swing Pullback Rejection")
-            scores.append(82)
-            direction = "BEARISH"
-            breakout_level = ema20
+    elif c > h20_prev and direction == "NEUTRAL":
+        smc_confluences.append("Bullish Structural BOS")
+        scores.append(92)
+        direction = "BULLISH"
 
     if not scores or direction == "NEUTRAL":
         return None
 
+    # 5. Oversold / Overbought Safety Shield
+    if direction == "BEARISH" and rsi < 25:
+        return None  # Rejects late short entries at extreme oversold bottoms
+    if direction == "BULLISH" and rsi > 75:
+        return None  # Rejects late long entries at extreme overbought tops
+
     master_score = max(scores) + min(len(smc_confluences) * 4.0, 20.0)
 
-    # TARGET & STOP LOSS CALCULATIONS
+    # 6. Entry, Target, and Stop Loss Calculations
+    suggested_entry = round(c, 2)
     if direction == "BULLISH":
-        suggested_entry = round(c, 2)
-        stop_loss = round(suggested_entry - (1.5 * atr if timeframe_label == "DAILY" else 1.0 * atr), 2)
+        stop_loss = round(suggested_entry - (1.2 * atr), 2)
         target_price = round(suggested_entry + (2.5 * abs(suggested_entry - stop_loss)), 2)
     else:
-        suggested_entry = round(c, 2)
-        stop_loss = round(suggested_entry + (1.5 * atr if timeframe_label == "DAILY" else 1.0 * atr), 2)
+        stop_loss = round(suggested_entry + (1.2 * atr), 2)
         target_price = round(suggested_entry - (2.5 * abs(stop_loss - suggested_entry)), 2)
 
     actual_risk = abs(suggested_entry - stop_loss)
     actual_reward = abs(target_price - suggested_entry)
     rr_ratio = round(actual_reward / actual_risk, 2) if actual_risk > 0 else 2.5
 
-# Calculate ML Feature Inputs
-    vwap_dist_pct = abs(c - ema20) / ema20 * 100
+    # 7. ML Feature Inputs & Inference
+    vwap_dist_pct = abs(c - vwap) / vwap * 100
     atr_pct = (atr / c) * 100
     pct_change = ((c - o) / o) * 100
     ema_aligned = (c > ema20 > ema50) if direction == "BULLISH" else (c < ema20 < ema50)
@@ -176,6 +182,7 @@ def run_smc_analysis(df: pd.DataFrame, timeframe_label="INTRADAY"):
 
     ml_out = predict_trade_probability(rvol, vwap_dist_pct, atr_pct, pct_change, ema_aligned, range_pos)
 
+    # Output structure strictly matches existing Streamlit rendering code
     return {
         "Symbol": df.name if hasattr(df, 'name') else "STOCK",
         "Direction": direction,
