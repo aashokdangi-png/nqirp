@@ -8,7 +8,7 @@ import os
 st.set_page_config(
     page_title="NQIRP Institutional Quant Engine",
     page_icon="⚡",
-    layout="wide",
+    layout="wide"
     initial_sidebar_state="expanded"
 )
 
@@ -436,12 +436,33 @@ if page == "⚡ SMC Institutional Scanner":
     
     symbols_to_scan = ["REDINGTON", "FIRSTSOURCE", "RELIANCE", "TCS", "INFY", "HDFCBANK", "ICICIBANK"]
 
-    tab_intraday, tab_swing, tab_momentum, tab_contrarian = st.tabs([
-        "⚡ Intraday SMC", 
-        "📈 Swing Signals", 
-        "🚀 Momentum Leaders", 
-        "🧠 Meta-Contrarian Engine"
-    ])
+   tab_intraday, tab_swing, tab_momentum, tab_contrarian = st.tabs([
+    "⚡ Intraday SMC", "📈 Swing Signals", "🚀 Momentum Leaders", "🧠 Meta-Contrarian Engine"
+])
+
+# 1. INTRADAY SMC TAB
+with tab_intraday:
+    st.markdown("### ⚡ Intraday SMC Scanner")
+    if st.button("⚡ Run Intraday SMC Scan", key="btn_intraday_scan"):
+        st.info("Running Intraday SMC Scan...")
+
+# 2. SWING SIGNALS TAB
+with tab_swing:
+    st.markdown("### 📈 Swing Signals Scanner")
+    if st.button("📈 Run Swing Scan", key="btn_swing_scan"):
+        st.info("Running Swing Signals Scan...")
+
+# 3. MOMENTUM LEADERS TAB
+with tab_momentum:
+    st.markdown("### 🚀 Momentum Leaders Scanner")
+    if st.button("🚀 Scan Momentum Leaders", key="btn_momentum_scan"):
+        st.info("Scanning Momentum Leaders...")
+
+# 4. META-CONTRARIAN TAB
+with tab_contrarian:
+    st.markdown("### 🧠 Meta-Contrarian Engine")
+    if st.button("🧠 Run Contrarian Scan", key="btn_contrarian_scan"):
+        st.info("Running Meta-Contrarian Scan...")
 
     # [Tabs 1, 2, and 3 remain exactly as they were above]
 
