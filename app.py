@@ -443,8 +443,8 @@ tab_intraday, tab_swing, tab_momentum, tab_contrarian = st.tabs([
    
 
 # ==============================================================================
-    # TAB 1: INTRADAY SMC SCANNER
-    # ==============================================================================
+# TAB 1: INTRADAY SMC SCANNER
+# ==============================================================================
     with tab_intraday:
         st.subheader("⚡ Live Intraday Scanner Results (5-Minute Timeframe)")
         st.caption("Targets updated to enforce a minimum 1:2.5 Risk-to-Reward ratio based on intraday volatility structure.")
