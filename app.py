@@ -726,28 +726,7 @@ elif page == "👁️ Vision AI Chart Pattern Scanner":
     st.subheader("📊 Automated Daily Diagnostic Reports")
     
     REPORT_FILE = "market_close_report.json"
-    if os.path.exists(REPORT_FILE):
-        try:
-            with open(REPORT_FILE, "r") as f:
-                reports = json.load(f)
-            latest_report = reports[-1]
-            st.info(f"**Report Date:** {latest_report.get('Date')} | **Tracked Stocks:** {latest_report.get('Total Tracked')}")
-
-            st.markdown("### 🛠️ Machine Fixes & Recommendations")
-            for rec in latest_report.get("Recommendations", []):
-                st.success(rec)
-
-            st.markdown("### 🔍 Missed Opportunities & False Positives")
-            missed = latest_report.get("Missed Details", [])
-            if missed:
-                st.dataframe(pd.DataFrame(missed), use_container_width=True)
-            else:
-                st.write("Zero missed major moves logged for this session!")
-        except Exception as e:
-            st.error(f"Error loading report: {e}")
-    else:
-        st.warning("No diagnostic report found yet. Reports auto-generate at market close (3:30 PM IST).")
-# ==============================================================================
+    # ==============================================================================
 # MACHINE LEARNING MODEL REVIEW & DIAGNOSTIC REPORT GENERATOR
 # ==============================================================================
 def render_ml_model_review_report():
@@ -806,3 +785,24 @@ def render_ml_model_review_report():
             st.plotly_chart(fig, use_container_width=True)
         else:
             st.info("Feature importance metrics not available for this model estimator type.")
+    if os.path.exists(REPORT_FILE):
+        try:
+            with open(REPORT_FILE, "r") as f:
+                reports = json.load(f)
+            latest_report = reports[-1]
+            st.info(f"**Report Date:** {latest_report.get('Date')} | **Tracked Stocks:** {latest_report.get('Total Tracked')}")
+
+            st.markdown("### 🛠️ Machine Fixes & Recommendations")
+            for rec in latest_report.get("Recommendations", []):
+                st.success(rec)
+
+            st.markdown("### 🔍 Missed Opportunities & False Positives")
+            missed = latest_report.get("Missed Details", [])
+            if missed:
+                st.dataframe(pd.DataFrame(missed), use_container_width=True)
+            else:
+                st.write("Zero missed major moves logged for this session!")
+        except Exception as e:
+            st.error(f"Error loading report: {e}")
+    else:
+        st.warning("No diagnostic report found yet. Reports auto-generate at market close (3:30 PM IST).")
