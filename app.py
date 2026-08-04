@@ -14,11 +14,11 @@ st.set_page_config(
 
 import yfinance as yf
 import os
-import joblib
+import pickle
 
 # Load pre-trained model if available in repository
 MODEL_PATH = "model.pkl"
-ml_model = joblib.load(MODEL_PATH) if os.path.exists(MODEL_PATH) else None
+ml_model = pickle.load(open(MODEL_PATH, "rb")) if os.path.exists(MODEL_PATH) else None
 
 def predict_trade_probability(rvol: float, vwap_dist_pct: float, atr_pct: float, day_change_pct: float, ema_aligned: bool, range_pos: float) -> dict:
     """
