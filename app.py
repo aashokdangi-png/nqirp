@@ -311,7 +311,118 @@ def run_momentum_leader_analysis(df: pd.DataFrame):
         "AI Win Prob": ml_out["AI Win Prob"],
         "Trap Risk": ml_out["Trap Risk"]
     }
+# ==============================================================================
+# 🧠 META-CONTRARIAN & CROWD EXHAUSTION ENGINE
+# ==============================================================================
+def run_meta_contrarian_analysis(df: pd.DataFrame) -> dict:
+    """
+    Evaluates crowd concentration, trend extension, and blow-off volume climaxes.
+    Re-ranks setups by applying contrarian factors to prevent chasing retail traps.
+    """
+    if df.empty or len(df) < 35:
+        return None
 
+    close = df['Close']
+    high = df['High']
+    low = df['Low']
+    open_p = df['Open']
+    volume = df['Volume']
+
+    c_live = float(close.iloc[-1])
+    c_closed = float(close.iloc[-2])
+    v_closed = float(volume.iloc[-2])
+
+    # 1. Technical Indicators on Closed Bar
+    ema20 = float(close.ewm(span=20).mean().iloc[-2])
+    tr = pd.concat([high - low, (high - close.shift(1)).abs(), (low - close.shift(1)).abs()], axis=1).max(axis=1)
+    atr = float(tr.tail(14).iloc[:-1].mean())
+    if atr <= 0 or np.isnan(atr):
+        return None
+
+    delta = close.diff()
+    gain = (delta.where(delta > 0, 0)).rolling(14).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
+    rs = gain / loss.replace(0, 1e-9)
+    rsi = float((100 - (100 / (1 + rs))).dropna().iloc[-2]) if len(rs) >= 14 else 50.0
+
+    v20 = float(volume.tail(20).mean())
+    rvol = v_closed / v20 if v20 > 0 else 1.0
+
+    today_date = close.index[-1].date() if hasattr(close.index[-1], 'date') else None
+    if today_date:
+        today_df = df[df.index.date == today_date]
+        vwap = float((today_df['Volume'] * (today_df['High'] + today_df['Low'] + today_df['Close']) / 3).sum() / today_df['Volume'].sum()) if not today_df.empty else c_closed
+    else:
+        vwap = float((volume * (high + low + close) / 3).cumsum().iloc[-2] / volume.cumsum().iloc[-2])
+
+    is_bullish = c_live > vwap and c_live > ema20
+    is_bearish = c_live < vwap and c_live < ema20
+    if not (is_bullish or is_bearish):
+        return None
+
+    base_score = 75.0
+    contrarian_modifier = 0.0
+    crowd_flags = []
+
+    # 2. Derive Meta-Contrarian Factors
+    vwap_dist_pct = abs(c_live - vwap) / vwap * 100
+    ema_dist_pct = abs(c_live - ema20) / ema20 * 100
+
+    if vwap_dist_pct > 1.8 or ema_dist_pct > 2.5:
+        contrarian_modifier -= 6.0
+        crowd_flags.append("⚠️ Overstretched VWAP (Chasing Risk)")
+    elif vwap_dist_pct < 0.4:
+        contrarian_modifier += 4.0
+        crowd_flags.append("🟢 Fresh Pullback near VWAP Anchor")
+
+    if rvol > 3.2:
+        contrarian_modifier -= 5.0
+        crowd_flags.append("🚨 Volume Blow-Off Climax")
+    elif 1.4 <= rvol <= 2.5:
+        contrarian_modifier += 4.0
+        crowd_flags.append("🟢 Healthy Institutional Volume")
+
+    if is_bullish and rsi > 72:
+        contrarian_modifier -= 5.0
+        crowd_flags.append("⚠️ RSI Overbought (>72)")
+    elif is_bearish and rsi < 28:
+        contrarian_modifier -= 5.0
+        crowd_flags.append("⚠️ RSI Oversold (<28)")
+    elif 45 <= rsi <= 62:
+        contrarian_modifier += 3.0
+        crowd_flags.append("🟢 RSI Balanced Zone")
+
+    h20 = float(high.tail(30).iloc[:-2].max())
+    l20 = float(low.tail(30).iloc[:-2].min())
+    if (c_live >= h20 and is_bullish) or (c_live <= l20 and is_bearish):
+        contrarian_modifier += 5.0
+        crowd_flags.append("🚀 Fresh Structural Breakout")
+
+    final_score = min(max(base_score + contrarian_modifier, 30.0), 98.0)
+
+    if contrarian_modifier <= -6.0:
+        crowd_status = "⚠️ CROWDED TRAP"
+        action_advice = "🛑 SKIP (High Reversal Risk)"
+    elif contrarian_modifier >= 5.0:
+        crowd_status = "🔥 A+ FRESH MOVE"
+        action_advice = "✅ HIGH CONVICTION"
+    else:
+        crowd_status = "🟡 MODERATE CROWDING"
+        action_advice = "⚡ HALF POSITION"
+
+    return {
+        "Symbol": df.name if hasattr(df, 'name') else "STOCK",
+        "Direction": "BULLISH" if is_bullish else "BEARISH",
+        "Base Score": round(base_score, 1),
+        "Contrarian Modifier": f"{contrarian_modifier:+.1f}",
+        "Final Re-Ranked Score": round(final_score, 1),
+        "Crowd Status": crowd_status,
+        "Actionable Advice": action_advice,
+        "Crowd Diagnostics": " | ".join(crowd_flags) if crowd_flags else "Standard Setup",
+        "Current Price": round(c_live, 2),
+        "RVOL": round(rvol, 2),
+        "VWAP Dist %": f"{round(vwap_dist_pct, 2)}%"
+    }
 # ==============================================================================
 # STREAMLIT APP NAVIGATION & UI
 # ==============================================================================
@@ -323,12 +434,13 @@ if page == "⚡ SMC Institutional Scanner":
     st.markdown("Real-time multi-timeframe quantitative scanning for SMC confluences, FVG, BOS, and Momentum Leaders.")
 
     symbols_to_scan = ["REDINGTON", "FIRSTSOURCE", "RELIANCE", "TCS", "INFY", "HDFCBANK", "ICICIBANK"]
-
-    tab_intraday, tab_daily, tab_momentum = st.tabs([
-        "⚡ 1. Live Intraday Results (5-Min Data)", 
-        "📊 2. Daily Swing Results (Historical)", 
-        "🚀 3. Momentum Leaders of the Day"
-    ])
+tab_intraday, tab_swing, tab_momentum, tab_contrarian = st.tabs([
+    "⚡ Intraday SMC", 
+    "📈 Swing Signals", 
+    "🚀 Momentum Leaders", 
+    "🧠 Meta-Contrarian Engine"
+])
+   
 
 # ==============================================================================
     # TAB 1: INTRADAY SMC SCANNER
@@ -415,6 +527,34 @@ if page == "⚡ SMC Institutional Scanner":
             st.dataframe(df_mom.reset_index(drop=True), use_container_width=True)
         else:
             st.info("Click 'Scan Momentum Leaders' above to trigger scanning.")
+# ==============================================================================
+    # TAB 4: META-CONTRARIAN ENGINE UI
+    # ==============================================================================
+    with tab_contrarian:
+        st.subheader("🧠 Meta-Contrarian & Crowd Exhaustion Re-Ranker")
+        st.caption("Filters standard momentum signals by penalizing overcrowded, overextended, or volume-climax setups.")
+
+        if st.button("🧠 Run Meta-Contrarian Audit", type="primary"):
+            with st.spinner("Auditing market consensus and crowd exhaustion..."):
+                contrarian_results = []
+                for symbol in symbols_to_scan:
+                    clean_sym = symbol.strip()
+                    df_data = fetch_data(clean_sym, period="5d", interval="5m")
+                    if not df_data.empty and len(df_data) >= 35:
+                        df_data.name = clean_sym
+                        c_res = run_meta_contrarian_analysis(df_data)
+                        if c_res:
+                            contrarian_results.append(c_res)
+                st.session_state['contrarian_results'] = contrarian_results
+
+        contrarian_results = st.session_state.get('contrarian_results', [])
+        if contrarian_results:
+            df_c = pd.DataFrame(contrarian_results)
+            if "Final Re-Ranked Score" in df_c.columns:
+                df_c = df_c.sort_values(by="Final Re-Ranked Score", ascending=False)
+            st.dataframe(df_c.reset_index(drop=True), use_container_width=True)
+        else:
+            st.info("Click 'Run Meta-Contrarian Audit' above to evaluate setups.")
 
 # ==============================================================================
 # VISION AI MODULE
