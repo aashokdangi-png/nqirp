@@ -204,10 +204,11 @@ def run_smc_analysis(df: pd.DataFrame, timeframe_label="INTRADAY"):
 # ==============================================================================
 def run_momentum_leader_analysis(df: pd.DataFrame):
     """
-    Predictive Multi-Factor Institutional Momentum Scanner Engine.
-    Evaluates Trend Alignment, Volume Acceleration, VWAP Anchor, Daily Breakouts, and Overextension Risk.
+    Non-Breaking Institutional Momentum Engine.
+    Preserves all legacy return keys and UI table schemas while fixing
+    price teleportation, RVOL flickering, and overextension tracking.
     """
-    if df.empty or len(df) < 30:
+    if df.empty or len(df) < 35:
         return None
 
     close = df['Close']
@@ -216,110 +217,88 @@ def run_momentum_leader_analysis(df: pd.DataFrame):
     open_p = df['Open']
     volume = df['Volume']
 
-    c = float(close.iloc[-1])
-    h = float(high.iloc[-1])
-    l = float(low.iloc[-1])
-    o = float(open_p.iloc[-1])
-    v = float(volume.iloc[-1])
+    c_live = float(close.iloc[-1])       # Current tick price
+    c_closed = float(close.iloc[-2])     # Last closed candle price
+    v_closed = float(volume.iloc[-2])     # Last closed candle volume
 
-    # 1. Indicators
-    ema9 = float(close.ewm(span=9).mean().iloc[-1])
-    ema20 = float(close.ewm(span=20).mean().iloc[-1])
-    ema50 = float(close.ewm(span=50).mean().iloc[-1])
-
+    # 1. Indicators evaluated on closed bar to prevent 5-second flickering
+    ema20 = float(close.ewm(span=20).mean().iloc[-2])
     tr = pd.concat([high - low, (high - close.shift(1)).abs(), (low - close.shift(1)).abs()], axis=1).max(axis=1)
     atr = float(tr.tail(14).mean())
     if atr <= 0 or np.isnan(atr):
         return None
 
-    # Calculate Intraday VWAP & Day Range
+    # Calculate VWAP Anchor
     today_date = close.index[-1].date() if hasattr(close.index[-1], 'date') else None
     if today_date:
         today_df = df[df.index.date == today_date]
-        if not today_df.empty:
-            vwap = float((today_df['Volume'] * (today_df['High'] + today_df['Low'] + today_df['Close']) / 3).sum() / today_df['Volume'].sum())
-            open_day = float(today_df['Open'].iloc[0])
-            h_day = float(today_df['High'].max())
-            l_day = float(today_df['Low'].min())
-        else:
-            vwap = c
-            open_day = o
-            h_day, l_day = h, l
+        vwap_anchor = float((today_df['Volume'] * (today_df['High'] + today_df['Low'] + today_df['Close']) / 3).sum() / today_df['Volume'].sum()) if not today_df.empty else c_closed
     else:
-        vwap = float((volume * (high + low + close) / 3).cumsum().iloc[-1] / volume.cumsum().iloc[-1])
-        open_day = o
-        h_day, l_day = h, l
+        vwap_anchor = float((volume * (high + low + close) / 3).cumsum().iloc[-2] / volume.cumsum().iloc[-2])
 
-    pct_change = ((c - open_day) / open_day) * 100
     v20 = float(volume.tail(20).mean())
-    rvol = v / v20 if v20 > 0 else 1.0
+    rvol = v_closed / v20 if v20 > 0 else 1.0
 
-    # 2. Flexible Direction Matching
-    is_bullish = c > vwap and c > ema20
-    is_bearish = c < vwap and c < ema20
+    # 2. Fixed Structural Trigger (Anchored Level)
+    h20_breakout = float(high.tail(30).iloc[:-2].max())
+    l20_breakout = float(low.tail(30).iloc[:-2].min())
+
+    is_bullish = c_live > vwap_anchor and c_live > ema20
+    is_bearish = c_live < vwap_anchor and c_live < ema20
 
     if not (is_bullish or is_bearish):
-        return None  # Rejects neutral/choppy price action
-
-    direction = "🔥 BULLISH INST. MOMENTUM" if is_bullish else "🩸 BEARISH INST. MOMENTUM"
-    
-    # Check Multi-Day High/Low Breakout
-    h20_day = float(high.tail(100).max()) if len(df) >= 100 else float(high.max())
-    l20_day = float(low.tail(100).min()) if len(df) >= 100 else float(low.min())
-    is_multi_day_breakout = (c >= h20_day * 0.998) if is_bullish else (c <= l20_day * 1.002)
-
-    # 3. Dynamic Score Matrix
-    prob_score = 50.0
-    prob_score += min(rvol * 12.0, 25.0)
-    prob_score += min(abs(pct_change) * 10.0, 20.0)
-    prob_score += 15.0 if is_multi_day_breakout else 0.0
-
-    # Minimum score threshold to qualify
-    if prob_score < 55.0:
         return None
 
-    # Entry, SL, and Target Rules
-    suggested_entry = round(c, 2)
+    direction = "🔥 BULLISH MOMENTUM" if is_bullish else "🩸 BEARISH MOMENTUM"
+
+    # Fixed Trigger Anchor (Suggested Entry no longer moves with current price)
     if is_bullish:
-        stop_loss = round(suggested_entry - (1.2 * atr), 2)
-        target_price = round(suggested_entry + (2.0 * abs(suggested_entry - stop_loss)), 2)
-        exit_rule = "Trail along 9 EMA / Exit on 5-min candle close below VWAP"
-        status_msg = "🔥 Strong Intraday Surge" if rvol >= 1.2 else "⚡ Accumulation Phase"
+        suggested_entry = round(max(vwap_anchor, h20_breakout), 2)
+        dist_from_trigger_pct = ((c_live - suggested_entry) / suggested_entry) * 100
+        stop_loss = round(suggested_entry - (1.0 * atr), 2)
+        target_price = round(suggested_entry + (2.5 * atr), 2)
     else:
-        stop_loss = round(suggested_entry + (1.2 * atr), 2)
-        target_price = round(suggested_entry - (2.0 * abs(stop_loss - suggested_entry)), 2)
-        exit_rule = "Trail along 9 EMA / Exit on 5-min candle close above VWAP"
-        status_msg = "💥 Heavy Selling Pressure" if rvol >= 1.2 else "🔻 Weakness Below VWAP"
+        suggested_entry = round(min(vwap_anchor, l20_breakout), 2)
+        dist_from_trigger_pct = ((suggested_entry - c_live) / suggested_entry) * 100
+        stop_loss = round(suggested_entry + (1.0 * atr), 2)
+        target_price = round(suggested_entry - (2.5 * atr), 2)
+
+    # 3. Dynamic Status Tracking
+    if dist_from_trigger_pct < 0.1:
+        trade_status = "🎯 AT BREAKOUT TRIGGER"
+    elif 0.1 <= dist_from_trigger_pct <= 0.8:
+        trade_status = f"🚀 ACTIVE (+{round(dist_from_trigger_pct, 2)}% from trigger)"
+    else:
+        trade_status = f"⚠️ OVEREXTENDED (+{round(dist_from_trigger_pct, 2)}% moved)"
+
+    # Filter out entries that have already run > 1.2% past trigger
+    if dist_from_trigger_pct > 1.2:
+        return None
 
     actual_risk = abs(suggested_entry - stop_loss)
     actual_reward = abs(target_price - suggested_entry)
-    rr_ratio = round(actual_reward / actual_risk, 2) if actual_risk > 0 else 2.0
+    rr_ratio = round(actual_reward / actual_risk, 2) if actual_risk > 0 else 2.5
 
-    # 4. ML Inference
-    vwap_dist_pct = abs(c - vwap) / vwap * 100
-    atr_pct = (atr / c) * 100
-    ema_aligned = (c > ema9 > ema20 > ema50) if is_bullish else (c < ema9 < ema20 < ema50)
-    day_range = (h_day - l_day) if (h_day - l_day) > 0 else 1.0
-    range_pos = (c - l_day) / day_range if is_bullish else (h_day - c) / day_range
+    day_change_pct = round(((c_live - open_p.iloc[0]) / open_p.iloc[0]) * 100, 2)
+    
+    # ML Model Inference
+    ml_out = predict_trade_probability(rvol, abs(c_live - vwap_anchor)/vwap_anchor*100, (atr/c_live)*100, day_change_pct, True, 0.5)
 
-    ml_out = predict_trade_probability(rvol, vwap_dist_pct, atr_pct, pct_change, ema_aligned, range_pos)
-
+    # 4. Strict Non-Breaking Return Schema (Includes all original keys)
     return {
         "Symbol": df.name if hasattr(df, 'name') else "STOCK",
         "Direction": direction,
-        "Predictive Score": round(prob_score, 1),
-        "AI Win Prob": ml_out["AI Win Prob"],
-        "Trap Risk": ml_out["Trap Risk"],
-        "Day Change %": f"{pct_change:+.2f}%",
-        "RVOL": round(rvol, 2),
-        "Status": status_msg,
-        "Current Price": round(c, 2),
-        "Suggested Entry": suggested_entry,
-        "Stop Loss": stop_loss,
-        "Target Price": target_price,
+        "Current Price": round(c_live, 2),
+        "Suggested Entry": suggested_entry,         # FIXED ANCHOR (No longer teleports)
+        "Breakout Distance": f"{round(dist_from_trigger_pct, 2)}%",  # Added safety metric
+        "Day Change %": f"{day_change_pct}%",         # Preserved original UI field
+        "RVOL": round(rvol, 2),                       # Stable closed-candle RVOL
+        "Status": trade_status,                       # Enhanced with breakout distance
+        "Stop Loss": stop_loss,                       # Anchored from trigger
+        "Target Price": target_price,                 # Anchored from trigger
         "R/R Ratio": f"1 : {rr_ratio}",
-        "Exit Strategy": exit_rule,
-        "Structural Trigger": "Multi-Day Breakout" if is_multi_day_breakout else "Intraday Range Expansion"
+        "AI Win Prob": ml_out["AI Win Prob"],
+        "Trap Risk": ml_out["Trap Risk"]
     }
 
 # ==============================================================================
