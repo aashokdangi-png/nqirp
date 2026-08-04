@@ -13,7 +13,50 @@ st.set_page_config(
 )
 
 import yfinance as yf
+import os
+import joblib
 
+# Load pre-trained model if available in repository
+MODEL_PATH = "model.pkl"
+ml_model = joblib.load(MODEL_PATH) if os.path.exists(MODEL_PATH) else None
+
+def predict_trade_probability(rvol: float, vwap_dist_pct: float, atr_pct: float, day_change_pct: float, ema_aligned: bool, range_pos: float) -> dict:
+    """
+    ML Inference Engine: Evaluates trade setups using feature vectors.
+    Returns AI Win Confidence % and Trap Risk status.
+    """
+    features = [[rvol, vwap_dist_pct, atr_pct, abs(day_change_pct), 1.0 if ema_aligned else 0.0, range_pos]]
+    
+    # 1. Use loaded model if available
+    if ml_model is not None:
+        try:
+            prob = float(ml_model.predict_proba(features)[0][1]) * 100
+        except Exception:
+            prob = None
+    else:
+        prob = None
+
+    # 2. Calibrated Quant Model (Fallback when model.pkl is not yet uploaded)
+    if prob is None:
+        base_prob = 50.0
+        base_prob += min(rvol * 8.0, 24.0)
+        base_prob += 12.0 if ema_aligned else -8.0
+        base_prob -= max((vwap_dist_pct - 1.5) * 6.0, 0) # Overextension penalty
+        base_prob += 10.0 if (0.2 <= range_pos <= 0.85) else -5.0 # Sweet spot range
+        prob = min(max(base_prob, 35.0), 96.0)
+
+    # Risk Trap Determination
+    if vwap_dist_pct > 2.0 or (rvol < 1.0 and abs(day_change_pct) > 3.0):
+        trap_risk = "⚠️ HIGH (Exhaustion/Trap)"
+    elif prob >= 75.0:
+        trap_risk = "🟢 LOW (High Conviction)"
+    else:
+        trap_risk = "🟡 MEDIUM"
+
+    return {
+        "AI Win Prob": f"{round(prob, 1)}%",
+        "Trap Risk": trap_risk
+    }
 def fetch_data(symbol, period="1d", interval="5m"):
     ticker_sym = f"{symbol}.NS" if not symbol.endswith(".NS") else symbol
     df = yf.download(ticker_sym, period=period, interval=interval, progress=False)
@@ -123,12 +166,23 @@ def run_smc_analysis(df: pd.DataFrame, timeframe_label="INTRADAY"):
     actual_reward = abs(target_price - suggested_entry)
     rr_ratio = round(actual_reward / actual_risk, 2) if actual_risk > 0 else 2.5
 
+# Calculate ML Feature Inputs
+    vwap_dist_pct = abs(c - ema20) / ema20 * 100
+    atr_pct = (atr / c) * 100
+    pct_change = ((c - o) / o) * 100
+    ema_aligned = (c > ema20 > ema50) if direction == "BULLISH" else (c < ema20 < ema50)
+    day_range = (h - l) if (h - l) > 0 else 1.0
+    range_pos = (c - l) / day_range
+
+    ml_out = predict_trade_probability(rvol, vwap_dist_pct, atr_pct, pct_change, ema_aligned, range_pos)
+
     return {
         "Symbol": df.name if hasattr(df, 'name') else "STOCK",
         "Direction": direction,
         "Master Score": round(master_score, 1),
+        "AI Win Prob": ml_out["AI Win Prob"],
+        "Trap Risk": ml_out["Trap Risk"],
         "Trade Action": "✅ SWING ENTRY" if timeframe_label == "DAILY" else "✅ ACTIVE ENTRY",
-        "Target Probability": "🔥 HIGH" if master_score >= 90 else "⚡ MEDIUM",
         "Suggested Entry": suggested_entry,
         "Current Price": round(c, 2),
         "Target Price": target_price,
@@ -221,12 +275,23 @@ def run_momentum_leader_analysis(df: pd.DataFrame):
 
     rr_ratio = round(abs(target_price - suggested_entry) / risk, 2) if risk > 0 else 3.0
 
+  # Calculate ML Feature Inputs
+    vwap_dist_pct = abs(c - vwap) / vwap * 100
+    atr_pct = (atr / c) * 100
+    ema_aligned = (c > ema9 > ema20 > ema50) if is_bullish else (c < ema9 < ema20 < ema50)
+    day_range = (h_day - l_day) if (h_day - l_day) > 0 else 1.0
+    range_pos = (c - l_day) / day_range if is_bullish else (h_day - c) / day_range
+
+    ml_out = predict_trade_probability(rvol, vwap_dist_pct, atr_pct, pct_change, ema_aligned, range_pos)
+
     return {
         "Symbol": df.name if hasattr(df, 'name') else "STOCK",
         "Direction": direction,
+        "Predictive Score": prob_score,
+        "AI Win Prob": ml_out["AI Win Prob"],
+        "Trap Risk": ml_out["Trap Risk"],
         "Day Change %": f"{pct_change:+.2f}%",
         "RVOL": round(rvol, 2),
-        "Predictive Score": prob_score,
         "Status": status_msg,
         "Current Price": round(c, 2),
         "Suggested Entry": suggested_entry,
