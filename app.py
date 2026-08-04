@@ -432,36 +432,56 @@ page = st.sidebar.radio("Select Module", ["⚡ SMC Institutional Scanner", "👁
 if page == "⚡ SMC Institutional Scanner":
     st.title("⚡ SMC Institutional Scanner Engine")
     st.markdown("Real-time multi-timeframe quantitative scanning for SMC confluences, FVG, BOS, and Momentum Leaders.")
-    
+
     symbols_to_scan = ["REDINGTON", "FIRSTSOURCE", "RELIANCE", "TCS", "INFY", "HDFCBANK", "ICICIBANK"]
 
-   tab_intraday, tab_swing, tab_momentum, tab_contrarian = st.tabs([
-    "⚡ Intraday SMC", "📈 Swing Signals", "🚀 Momentum Leaders", "🧠 Meta-Contrarian Engine"
-])
+    tab_intraday, tab_swing, tab_momentum, tab_contrarian = st.tabs([
+        "⚡ Intraday SMC", "📈 Swing Signals", "🚀 Momentum Leaders", "🧠 Meta-Contrarian Engine"
+    ])
 
-# 1. INTRADAY SMC TAB
-with tab_intraday:
-    st.markdown("### ⚡ Intraday SMC Scanner")
-    if st.button("⚡ Run Intraday SMC Scan", key="btn_intraday_scan"):
-        st.info("Running Intraday SMC Scan...")
+    # 1. INTRADAY SMC TAB
+    with tab_intraday:
+        st.markdown("### ⚡ Intraday SMC Scanner")
+        if st.button("⚡ Run Intraday SMC Scan", key="btn_intraday_scan"):
+            st.info("Running Intraday SMC Scan...")
 
-# 2. SWING SIGNALS TAB
-with tab_swing:
-    st.markdown("### 📈 Swing Signals Scanner")
-    if st.button("📈 Run Swing Scan", key="btn_swing_scan"):
-        st.info("Running Swing Signals Scan...")
+    # 2. SWING SIGNALS TAB
+    with tab_swing:
+        st.markdown("### 📈 Swing Signals Scanner")
+        if st.button("📈 Run Swing Scan", key="btn_swing_scan"):
+            st.info("Running Swing Signals Scan...")
 
-# 3. MOMENTUM LEADERS TAB
-with tab_momentum:
-    st.markdown("### 🚀 Momentum Leaders Scanner")
-    if st.button("🚀 Scan Momentum Leaders", key="btn_momentum_scan"):
-        st.info("Scanning Momentum Leaders...")
+    # 3. MOMENTUM LEADERS TAB
+    with tab_momentum:
+        st.markdown("### 🚀 Momentum Leaders Scanner")
+        if st.button("🚀 Scan Momentum Leaders", key="btn_momentum_scan"):
+            st.info("Scanning Momentum Leaders...")
 
-# 4. META-CONTRARIAN TAB
-with tab_contrarian:
-    st.markdown("### 🧠 Meta-Contrarian Engine")
-    if st.button("🧠 Run Contrarian Scan", key="btn_contrarian_scan"):
-        st.info("Running Meta-Contrarian Scan...")
+    # 4. META-CONTRARIAN TAB
+    with tab_contrarian:
+        st.subheader("🧠 Meta-Contrarian & Crowd Exhaustion Re-Ranker")
+        st.caption("Filters standard momentum signals by penalizing overcrowded, overextended, or volume-climax setups.")
+        if st.button("🧠 Run Meta-Contrarian Audit", type="primary", key="btn_contrarian_scan"):
+            with st.spinner("Auditing market consensus and crowd exhaustion..."):
+                contrarian_results = []
+                for symbol in symbols_to_scan:
+                    clean_sym = symbol.strip()
+                    df_data = fetch_data(clean_sym, period="5d", interval="5m")
+                    if not df_data.empty and len(df_data) >= 35:
+                        df_data.name = clean_sym
+                        c_res = run_meta_contrarian_analysis(df_data)
+                        if c_res:
+                            contrarian_results.append(c_res)
+                st.session_state['contrarian_results'] = contrarian_results
+
+        contrarian_results = st.session_state.get('contrarian_results', [])
+        if contrarian_results:
+            df_c = pd.DataFrame(contrarian_results)
+            if "Final Re-Ranked Score" in df_c.columns:
+                df_c = df_c.sort_values(by="Final Re-Ranked Score", ascending=False)
+            st.dataframe(df_c.reset_index(drop=True), use_container_width=True)
+        else:
+            st.info("Click 'Run Meta-Contrarian Audit' above to evaluate setups.")
 
     # [Tabs 1, 2, and 3 remain exactly as they were above]
 
