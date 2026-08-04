@@ -275,7 +275,9 @@ def run_momentum_leader_analysis(df: pd.DataFrame):
 
     rr_ratio = round(abs(target_price - suggested_entry) / risk, 2) if risk > 0 else 3.0
 
-  # Calculate ML Feature Inputs
+# Calculate ML Feature Inputs
+    h_day = float(high.tail(75).max()) if len(df) >= 75 else float(high.max())
+    l_day = float(low.tail(75).min()) if len(df) >= 75 else float(low.min())
     vwap_dist_pct = abs(c - vwap) / vwap * 100
     atr_pct = (atr / c) * 100
     ema_aligned = (c > ema9 > ema20 > ema50) if is_bullish else (c < ema9 < ema20 < ema50)
