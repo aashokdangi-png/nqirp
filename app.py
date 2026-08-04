@@ -375,35 +375,36 @@ if page == "⚡ SMC Institutional Scanner":
         else:
             st.info("Click 'Scan Daily Swing Signals' above to trigger scanning.")
 
-  # ==============================================================================
+# ==============================================================================
 # TAB 3: PREDICTIVE MOMENTUM LEADERS SCANNER
 # ==============================================================================
-with tab_momentum:
-    st.subheader("🚀 Institutional Momentum Leaders of the Day")
-    st.caption("Filters stocks with strong intraday volume acceleration, VWAP alignment, and multi-factor probability scores.")
-    
-    if st.button("🚀 Scan Momentum Leaders", type="primary"):
-        with st.spinner("Scanning for high-momentum leaders..."):
-            momentum_results = []
-            for symbol in symbols_to_scan:
-                clean_sym = symbol.strip()
-                df_5m = fetch_data(clean_sym, period="5d", interval="5m")
-                if not df_5m.empty and len(df_5m) >= 30:
-                    df_5m.name = clean_sym
-                    m_res = run_momentum_leader_analysis(df_5m)
-                    if m_res:
-                        m_res["Upstox Instrument Key"] = f"NSE_EQ|{clean_sym}"
-                        momentum_results.append(m_res)
-            st.session_state['momentum_results'] = momentum_results
+    with tab_momentum:
+        st.subheader("🚀 Institutional Momentum Leaders of the Day")
+        st.caption("Filters stocks with strong intraday volume acceleration, VWAP alignment, and multi-factor probability scores.")
+        
+        if st.button("🚀 Scan Momentum Leaders", type="primary"):
+            with st.spinner("Scanning for high-momentum leaders..."):
+                momentum_results = []
+                for symbol in symbols_to_scan:
+                    clean_sym = symbol.strip()
+                    df_5m = fetch_data(clean_sym, period="5d", interval="5m")
+                    if not df_5m.empty and len(df_5m) >= 30:
+                        df_5m.name = clean_sym
+                        m_res = run_momentum_leader_analysis(df_5m)
+                        if m_res:
+                            m_res["Upstox Instrument Key"] = f"NSE_EQ|{clean_sym}"
+                            momentum_results.append(m_res)
+                st.session_state['momentum_results'] = momentum_results
 
-    momentum_results = st.session_state.get('momentum_results', [])
-    if momentum_results:
-        df_mom = pd.DataFrame(momentum_results)
-        if "Predictive Score" in df_mom.columns:
-            df_mom = df_mom.sort_values(by="Predictive Score", ascending=False)
-        st.dataframe(df_mom.reset_index(drop=True), use_container_width=True)
-    else:
-        st.info("Click 'Scan Momentum Leaders' above to trigger scanning.")
+        momentum_results = st.session_state.get('momentum_results', [])
+        if momentum_results:
+            df_mom = pd.DataFrame(momentum_results)
+            if "Predictive Score" in df_mom.columns:
+                df_mom = df_mom.sort_values(by="Predictive Score", ascending=False)
+            st.dataframe(df_mom.reset_index(drop=True), use_container_width=True)
+        else:
+            st.info("Click 'Scan Momentum Leaders' above to trigger scanning.")
+
 # ==============================================================================
 # VISION AI MODULE
 # ==============================================================================
