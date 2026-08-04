@@ -68,8 +68,8 @@ def fetch_data(symbol, period="1d", interval="5m"):
 # ==============================================================================
 def run_smc_analysis(df: pd.DataFrame, timeframe_label="INTRADAY"):
     """
-    SMC Institutional Analysis Engine with Early Momentum Triggers, RSI Safeguard, and ML Inference.
-    Does NOT alter existing UI schemas or table structures.
+    SMC Institutional Engine with Fixed Trigger Anchoring, Closed Candle Indicators,
+    and 100% UI Schema Preservation (Tab 1 & Tab 2).
     """
     if df.empty or len(df) < 30:
         return None
@@ -83,106 +83,117 @@ def run_smc_analysis(df: pd.DataFrame, timeframe_label="INTRADAY"):
     if len(close) < 20:
         return None
 
-    c = float(close.iloc[-1])
-    h = float(high.iloc[-1])
-    l = float(low.iloc[-1])
-    o = float(open_p.iloc[-1])
-    v = float(volume.iloc[-1])
+    c_live = float(close.iloc[-1])       # Current tick price
+    c_closed = float(close.iloc[-2])     # Closed candle price
+    v_closed = float(volume.iloc[-2])     # Closed candle volume
+    o_live = float(open_p.iloc[-1])
 
-    # 1. Volatility & Indicators
+    # 1. Volatility & Indicators on Closed Candle (Prevents flickering)
     tr = pd.concat([high - low, (high - close.shift(1)).abs(), (low - close.shift(1)).abs()], axis=1).max(axis=1)
-    atr = float(tr.tail(14).mean())
+    atr = float(tr.tail(14).iloc[:-1].mean())
     if atr <= 0 or np.isnan(atr):
         return None
 
-    # RSI (14) Calculation (Safety Guard)
+    # RSI (14) on Closed Candle
     delta = close.diff()
     gain = (delta.where(delta > 0, 0)).rolling(14).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
     rs = gain / loss.replace(0, 1e-9)
     rsi_series = 100 - (100 / (1 + rs))
-    rsi = float(rsi_series.dropna().iloc[-1]) if not rsi_series.dropna().empty else 50.0
+    rsi = float(rsi_series.dropna().iloc[-2]) if len(rsi_series.dropna()) >= 2 else 50.0
 
-    # Volume & VWAP
+    # Volume & VWAP Anchor
     v20 = float(volume.tail(20).mean())
-    rvol = v / v20 if v20 > 0 else 1.0
-    ema20 = float(close.ewm(span=20).mean().iloc[-1])
-    ema50 = float(close.ewm(span=50).mean().iloc[-1])
-    vwap = float((volume * (high + low + close) / 3).cumsum().iloc[-1] / volume.cumsum().iloc[-1]) if volume.sum() > 0 else c
+    rvol = v_closed / v20 if v20 > 0 else 1.0
+    ema20 = float(close.ewm(span=20).mean().iloc[-2])
+    ema50 = float(close.ewm(span=50).mean().iloc[-2])
+    vwap = float((volume * (high + low + close) / 3).cumsum().iloc[-2] / volume.cumsum().iloc[-2]) if volume.sum() > 0 else c_closed
 
     smc_confluences, scores = [], []
     direction = "NEUTRAL"
+    trigger_price = c_closed
 
-    # 2. EARLY MOMENTUM TRIGGER 1: VWAP Cross (Catches early moves at 1,450+)
-    if c < vwap and close.iloc[-2] >= vwap and (o - c) > (atr * 0.4):
+    # 2. EARLY MOMENTUM TRIGGER 1: VWAP Cross
+    if c_live < vwap and close.iloc[-2] >= vwap and (o_live - c_live) > (atr * 0.3):
         smc_confluences.append("Early VWAP Breakdown Cross")
         scores.append(90)
         direction = "BEARISH"
-    elif c > vwap and close.iloc[-2] <= vwap and (c - o) > (atr * 0.4):
+        trigger_price = round(vwap, 2)
+    elif c_live > vwap and close.iloc[-2] <= vwap and (c_live - o_live) > (atr * 0.3):
         smc_confluences.append("Early VWAP Bullish Cross")
         scores.append(90)
         direction = "BULLISH"
+        trigger_price = round(vwap, 2)
 
     # 3. EARLY MOMENTUM TRIGGER 2: Micro-BOS Wick Sweep
     l3_prev = float(low.tail(4).iloc[:-1].min())
     h3_prev = float(high.tail(4).iloc[:-1].max())
-
-    if c < l3_prev and direction == "NEUTRAL":
+    if c_live < l3_prev and direction == "NEUTRAL":
         smc_confluences.append("Micro-BOS Wick Breakdown")
         scores.append(85)
         direction = "BEARISH"
-    elif c > h3_prev and direction == "NEUTRAL":
+        trigger_price = round(l3_prev, 2)
+    elif c_live > h3_prev and direction == "NEUTRAL":
         smc_confluences.append("Micro-BOS Wick Breakout")
         scores.append(85)
         direction = "BULLISH"
+        trigger_price = round(h3_prev, 2)
 
     # 4. Fallback Standard Structural BOS
     h20_prev = float(high.tail(25).iloc[:-5].max())
     l20_prev = float(low.tail(25).iloc[:-5].min())
-    if c < l20_prev and direction == "NEUTRAL":
+    if c_live < l20_prev and direction == "NEUTRAL":
         smc_confluences.append("Bearish Structural BOS")
         scores.append(92)
         direction = "BEARISH"
-    elif c > h20_prev and direction == "NEUTRAL":
+        trigger_price = round(l20_prev, 2)
+    elif c_live > h20_prev and direction == "NEUTRAL":
         smc_confluences.append("Bullish Structural BOS")
         scores.append(92)
         direction = "BULLISH"
+        trigger_price = round(h20_prev, 2)
 
     if not scores or direction == "NEUTRAL":
         return None
 
     # 5. Oversold / Overbought Safety Shield
     if direction == "BEARISH" and rsi < 25:
-        return None  # Rejects late short entries at extreme oversold bottoms
+        return None
     if direction == "BULLISH" and rsi > 75:
-        return None  # Rejects late long entries at extreme overbought tops
+        return None
 
     master_score = max(scores) + min(len(smc_confluences) * 4.0, 20.0)
 
-    # 6. Entry, Target, and Stop Loss Calculations
-    suggested_entry = round(c, 2)
+    # 6. Fixed Trigger Entry, Target, Stop Loss, and Overextension Shield
+    suggested_entry = trigger_price
     if direction == "BULLISH":
+        dist_from_trigger_pct = ((c_live - suggested_entry) / suggested_entry) * 100
         stop_loss = round(suggested_entry - (1.2 * atr), 2)
         target_price = round(suggested_entry + (2.5 * abs(suggested_entry - stop_loss)), 2)
     else:
+        dist_from_trigger_pct = ((suggested_entry - c_live) / suggested_entry) * 100
         stop_loss = round(suggested_entry + (1.2 * atr), 2)
         target_price = round(suggested_entry - (2.5 * abs(stop_loss - suggested_entry)), 2)
+
+    # Reject trades that ran > 1.2% past trigger point
+    if dist_from_trigger_pct > 1.2:
+        return None
 
     actual_risk = abs(suggested_entry - stop_loss)
     actual_reward = abs(target_price - suggested_entry)
     rr_ratio = round(actual_reward / actual_risk, 2) if actual_risk > 0 else 2.5
 
     # 7. ML Feature Inputs & Inference
-    vwap_dist_pct = abs(c - vwap) / vwap * 100
-    atr_pct = (atr / c) * 100
-    pct_change = ((c - o) / o) * 100
-    ema_aligned = (c > ema20 > ema50) if direction == "BULLISH" else (c < ema20 < ema50)
-    day_range = (h - l) if (h - l) > 0 else 1.0
-    range_pos = (c - l) / day_range
+    vwap_dist_pct = abs(c_live - vwap) / vwap * 100
+    atr_pct = (atr / c_live) * 100
+    pct_change = ((c_live - o_live) / o_live) * 100
+    ema_aligned = (c_live > ema20 > ema50) if direction == "BULLISH" else (c_live < ema20 < ema50)
+    day_range = (float(high.iloc[-1]) - float(low.iloc[-1])) if (float(high.iloc[-1]) - float(low.iloc[-1])) > 0 else 1.0
+    range_pos = (c_live - float(low.iloc[-1])) / day_range
 
     ml_out = predict_trade_probability(rvol, vwap_dist_pct, atr_pct, pct_change, ema_aligned, range_pos)
 
-    # Output structure strictly matches existing Streamlit rendering code
+    # 100% PRESERVED DICTIONARY SCHEMA
     return {
         "Symbol": df.name if hasattr(df, 'name') else "STOCK",
         "Direction": direction,
@@ -190,12 +201,12 @@ def run_smc_analysis(df: pd.DataFrame, timeframe_label="INTRADAY"):
         "AI Win Prob": ml_out["AI Win Prob"],
         "Trap Risk": ml_out["Trap Risk"],
         "Trade Action": "✅ SWING ENTRY" if timeframe_label == "DAILY" else "✅ ACTIVE ENTRY",
-        "Suggested Entry": suggested_entry,
-        "Current Price": round(c, 2),
+        "Suggested Entry": suggested_entry,         # FIXED TRIGGER ANCHOR
+        "Current Price": round(c_live, 2),          # LIVE TICK PRICE
         "Target Price": target_price,
         "Stop Loss": stop_loss,
         "R/R Ratio": f"1 : {rr_ratio}",
-        "RVOL": round(rvol, 2),
+        "RVOL": round(rvol, 2),                     # STABLE CLOSED BAR RVOL
         "SMC Signals": ", ".join(smc_confluences)
     }
 
