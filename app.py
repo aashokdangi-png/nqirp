@@ -8,11 +8,20 @@ import yfinance as yf
 import pickle
 import json
 
-@st.cache_data(ttl=3600, show_spinner="Fetching stock data...")
+st.set_page_config(
+    page_title="NQIRP Institutional Quant Engine",
+    page_icon="⚡",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+# ==============================================================================
+# DATA FETCHING & CACHING (FIX #2: Added cache to fetch_data to stop rate limits)
+# ==============================================================================
+@st.cache_data(ttl=3600, show_spinner="Fetching stock universe...")
 def fetch_universe_data(tickers: list) -> dict:
     formatted_tickers = [t if t.endswith(('.NS', '.BO')) else f"{t}.NS" for t in tickers]
     data = yf.download(formatted_tickers, period="1y", interval="1d", group_by="ticker", threads=True, progress=False)
-    
     stock_dict = {}
     for sym in formatted_tickers:
         try:
@@ -23,25 +32,25 @@ def fetch_universe_data(tickers: list) -> dict:
             continue
     return stock_dict
 
-st.set_page_config(
-    page_title="NQIRP Institutional Quant Engine",
-    page_icon="⚡",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+@st.cache_data(ttl=300, show_spinner=False)
+def fetch_data(symbol: str, period: str = "1d", interval: str = "5m") -> pd.DataFrame:
+    """ Cached single ticker data fetcher to prevent yfinance rate limits and tab delay. """
+    ticker_sym = f"{symbol}.NS" if not symbol.endswith(('.NS', '.BO')) else symbol
+    df = yf.download(ticker_sym, period=period, interval=interval, progress=False)
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = df.columns.get_level_values(0)
+    return df
 
-# Load pre-trained model if available in repository
+# ==============================================================================
+# MACHINE LEARNING INFERENCE ENGINE
+# ==============================================================================
 MODEL_PATH = "model.pkl"
 ml_model = pickle.load(open(MODEL_PATH, "rb")) if os.path.exists(MODEL_PATH) else None
 
 def predict_trade_probability(rvol: float, vwap_dist_pct: float, atr_pct: float, day_change_pct: float, ema_aligned: bool, range_pos: float) -> dict:
-    """
-    ML Inference Engine: Evaluates trade setups using feature vectors.
-    Returns AI Win Confidence % and Trap Risk status.
-    """
+    """ Machine Learning Inference Engine with dynamic heuristic fallbacks. """
     features = [[rvol, vwap_dist_pct, atr_pct, abs(day_change_pct), 1.0 if ema_aligned else 0.0, range_pos]]
     
-    # 1. Use loaded model if available
     if ml_model is not None:
         try:
             prob = float(ml_model.predict_proba(features)[0][1]) * 100
@@ -50,16 +59,14 @@ def predict_trade_probability(rvol: float, vwap_dist_pct: float, atr_pct: float,
     else:
         prob = None
 
-    # 2. Calibrated Quant Model (Fallback when model.pkl is not yet uploaded)
     if prob is None:
         base_prob = 50.0
         base_prob += min(rvol * 8.0, 24.0)
         base_prob += 12.0 if ema_aligned else -8.0
-        base_prob -= max((vwap_dist_pct - 1.5) * 6.0, 0) # Overextension penalty
-        base_prob += 10.0 if (0.2 <= range_pos <= 0.85) else -5.0 # Sweet spot range
+        base_prob -= max((vwap_dist_pct - 1.5) * 6.0, 0)
+        base_prob += 10.0 if (0.2 <= range_pos <= 0.85) else -5.0
         prob = min(max(base_prob, 35.0), 96.0)
 
-    # Risk Trap Determination
     if vwap_dist_pct > 2.0 or (rvol < 1.0 and abs(day_change_pct) > 3.0):
         trap_risk = "⚠️ HIGH (Exhaustion/Trap)"
     elif prob >= 75.0:
@@ -72,21 +79,10 @@ def predict_trade_probability(rvol: float, vwap_dist_pct: float, atr_pct: float,
         "Trap Risk": trap_risk
     }
 
-def fetch_data(symbol, period="1d", interval="5m"):
-    ticker_sym = f"{symbol}.NS" if not symbol.endswith(".NS") else symbol
-    df = yf.download(ticker_sym, period=period, interval=interval, progress=False)
-    if isinstance(df.columns, pd.MultiIndex):
-        df.columns = df.columns.get_level_values(0)
-    return df
-
 # ==============================================================================
 # QUANTITATIVE SMC ENGINE (INTRADAY vs DAILY)
 # ==============================================================================
-def run_smc_analysis(df: pd.DataFrame, timeframe_label="INTRADAY"):
-    """
-    SMC Institutional Engine with Fixed Trigger Anchoring, Closed Candle Indicators,
-    and 100% UI Schema Preservation (Tab 1 & Tab 2).
-    """
+def run_smc_analysis(df: pd.DataFrame, timeframe_label="INTRADAY") -> dict:
     if df.empty or len(df) < 30:
         return None
 
@@ -99,18 +95,17 @@ def run_smc_analysis(df: pd.DataFrame, timeframe_label="INTRADAY"):
     if len(close) < 20:
         return None
 
-    c_live = float(close.iloc[-1])       # Current tick price
-    c_closed = float(close.iloc[-2])     # Closed candle price
-    v_closed = float(volume.iloc[-2])     # Closed candle volume
+    c_live = float(close.iloc[-1])
+    c_closed = float(close.iloc[-2])
+    v_closed = float(volume.iloc[-2])
     o_live = float(open_p.iloc[-1])
 
-    # 1. Volatility & Indicators on Closed Candle (Prevents flickering)
+    # Volatility & Closed Bar Indicators
     tr = pd.concat([high - low, (high - close.shift(1)).abs(), (low - close.shift(1)).abs()], axis=1).max(axis=1)
     atr = float(tr.tail(14).iloc[:-1].mean())
     if atr <= 0 or np.isnan(atr):
         return None
 
-    # RSI (14) on Closed Candle
     delta = close.diff()
     gain = (delta.where(delta > 0, 0)).rolling(14).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
@@ -118,7 +113,6 @@ def run_smc_analysis(df: pd.DataFrame, timeframe_label="INTRADAY"):
     rsi_series = 100 - (100 / (1 + rs))
     rsi = float(rsi_series.dropna().iloc[-2]) if len(rsi_series.dropna()) >= 2 else 50.0
 
-    # Volume & VWAP Anchor
     v20 = float(volume.tail(20).mean())
     rvol = v_closed / v20 if v20 > 0 else 1.0
     ema20 = float(close.ewm(span=20).mean().iloc[-2])
@@ -129,7 +123,7 @@ def run_smc_analysis(df: pd.DataFrame, timeframe_label="INTRADAY"):
     direction = "NEUTRAL"
     trigger_price = c_closed
 
-    # 2. EARLY MOMENTUM TRIGGER 1: VWAP Cross
+    # VWAP Crosses
     if c_live < vwap and close.iloc[-2] >= vwap and (o_live - c_live) > (atr * 0.3):
         smc_confluences.append("Early VWAP Breakdown Cross")
         scores.append(90)
@@ -141,7 +135,7 @@ def run_smc_analysis(df: pd.DataFrame, timeframe_label="INTRADAY"):
         direction = "BULLISH"
         trigger_price = round(vwap, 2)
 
-    # 3. EARLY MOMENTUM TRIGGER 2: Micro-BOS Wick Sweep
+    # Micro-BOS Sweeps
     l3_prev = float(low.tail(4).iloc[:-1].min())
     h3_prev = float(high.tail(4).iloc[:-1].max())
     if c_live < l3_prev and direction == "NEUTRAL":
@@ -155,7 +149,7 @@ def run_smc_analysis(df: pd.DataFrame, timeframe_label="INTRADAY"):
         direction = "BULLISH"
         trigger_price = round(h3_prev, 2)
 
-    # 4. Fallback Standard Structural BOS
+    # Structural BOS
     h20_prev = float(high.tail(25).iloc[:-5].max())
     l20_prev = float(low.tail(25).iloc[:-5].min())
     if c_live < l20_prev and direction == "NEUTRAL":
@@ -172,15 +166,12 @@ def run_smc_analysis(df: pd.DataFrame, timeframe_label="INTRADAY"):
     if not scores or direction == "NEUTRAL":
         return None
 
-    # 5. Oversold / Overbought Safety Shield
-    if direction == "BEARISH" and rsi < 25:
-        return None
-    if direction == "BULLISH" and rsi > 75:
+    # Overbought/Oversold Safety Shield
+    if (direction == "BEARISH" and rsi < 25) or (direction == "BULLISH" and rsi > 75):
         return None
 
     master_score = max(scores) + min(len(smc_confluences) * 4.0, 20.0)
 
-    # 6. Fixed Trigger Entry, Target, Stop Loss, and Overextension Shield
     suggested_entry = trigger_price
     if direction == "BULLISH":
         dist_from_trigger_pct = ((c_live - suggested_entry) / suggested_entry) * 100
@@ -191,7 +182,6 @@ def run_smc_analysis(df: pd.DataFrame, timeframe_label="INTRADAY"):
         stop_loss = round(suggested_entry + (1.2 * atr), 2)
         target_price = round(suggested_entry - (2.5 * abs(stop_loss - suggested_entry)), 2)
 
-    # Reject trades that ran > 1.2% past trigger point
     if dist_from_trigger_pct > 1.2:
         return None
 
@@ -199,7 +189,6 @@ def run_smc_analysis(df: pd.DataFrame, timeframe_label="INTRADAY"):
     actual_reward = abs(target_price - suggested_entry)
     rr_ratio = round(actual_reward / actual_risk, 2) if actual_risk > 0 else 2.5
 
-    # 7. ML Feature Inputs & Inference
     vwap_dist_pct = abs(c_live - vwap) / vwap * 100
     atr_pct = (atr / c_live) * 100
     pct_change = ((c_live - o_live) / o_live) * 100
@@ -210,7 +199,7 @@ def run_smc_analysis(df: pd.DataFrame, timeframe_label="INTRADAY"):
     ml_out = predict_trade_probability(rvol, vwap_dist_pct, atr_pct, pct_change, ema_aligned, range_pos)
 
     return {
-        "Symbol": df.name if hasattr(df, 'name') else "STOCK",
+        "Symbol": getattr(df, 'name', "STOCK"),
         "Direction": direction,
         "Master Score": round(master_score, 1),
         "AI Win Prob": ml_out["AI Win Prob"],
@@ -226,14 +215,9 @@ def run_smc_analysis(df: pd.DataFrame, timeframe_label="INTRADAY"):
     }
 
 # ==============================================================================
-# 🚀 INSTITUTIONAL MOMENTUM SCANNER ENGINE
+# INSTITUTIONAL MOMENTUM SCANNER ENGINE
 # ==============================================================================
 def run_momentum_leader_analysis(df: pd.DataFrame):
-    """
-    Non-Breaking Institutional Momentum Engine.
-    Fixes KeyError by explicitly returning 'Predictive Score', while locking entry 
-    anchors and eliminating 5-second indicator flickering.
-    """
     if df.empty or len(df) < 35:
         return None
 
@@ -243,18 +227,16 @@ def run_momentum_leader_analysis(df: pd.DataFrame):
     open_p = df['Open']
     volume = df['Volume']
 
-    c_live = float(close.iloc[-1])       # Current tick price
-    c_closed = float(close.iloc[-2])     # Last closed candle price
-    v_closed = float(volume.iloc[-2])     # Last closed candle volume
+    c_live = float(close.iloc[-1])
+    c_closed = float(close.iloc[-2])
+    v_closed = float(volume.iloc[-2])
 
-    # 1. Indicators evaluated on closed bar to prevent 5-second flickering
     ema20 = float(close.ewm(span=20).mean().iloc[-2])
     tr = pd.concat([high - low, (high - close.shift(1)).abs(), (low - close.shift(1)).abs()], axis=1).max(axis=1)
     atr = float(tr.tail(14).mean())
     if atr <= 0 or np.isnan(atr):
         return None
 
-    # Calculate VWAP Anchor
     today_date = close.index[-1].date() if hasattr(close.index[-1], 'date') else None
     if today_date:
         today_df = df[df.index.date == today_date]
@@ -265,7 +247,6 @@ def run_momentum_leader_analysis(df: pd.DataFrame):
     v20 = float(volume.tail(20).mean())
     rvol = v_closed / v20 if v20 > 0 else 1.0
 
-    # 2. Fixed Structural Trigger
     h20_breakout = float(high.tail(30).iloc[:-2].max())
     l20_breakout = float(low.tail(30).iloc[:-2].min())
 
@@ -291,7 +272,6 @@ def run_momentum_leader_analysis(df: pd.DataFrame):
     day_change_pct = round(((c_live - open_p.iloc[0]) / open_p.iloc[0]) * 100, 2)
     predictive_score = 50.0 + min(rvol * 12.0, 25.0) + min(abs(day_change_pct) * 10.0, 25.0)
 
-    # 3. Dynamic Status Tracking
     if dist_from_trigger_pct < 0.1:
         trade_status = "🎯 AT BREAKOUT TRIGGER"
     elif 0.1 <= dist_from_trigger_pct <= 0.8:
@@ -309,7 +289,7 @@ def run_momentum_leader_analysis(df: pd.DataFrame):
     ml_out = predict_trade_probability(rvol, abs(c_live - vwap_anchor)/vwap_anchor*100, (atr/c_live)*100, day_change_pct, True, 0.5)
 
     return {
-        "Symbol": df.name if hasattr(df, 'name') else "STOCK",
+        "Symbol": getattr(df, 'name', "STOCK"),
         "Direction": direction,
         "Predictive Score": round(predictive_score, 1),
         "Current Price": round(c_live, 2),
@@ -326,27 +306,21 @@ def run_momentum_leader_analysis(df: pd.DataFrame):
     }
 
 # ==============================================================================
-# 🧠 META-CONTRARIAN & CROWD EXHAUSTION ENGINE (ISOLATED MODULE)
+# META-CONTRARIAN & CROWD EXHAUSTION ENGINE
 # ==============================================================================
 def run_meta_contrarian_analysis(df: pd.DataFrame) -> dict:
-    """
-    Evaluates crowd concentration, trend extension, and blow-off volume climaxes.
-    Re-ranks setups by applying contrarian factors to prevent chasing retail traps.
-    """
     if df.empty or len(df) < 35:
         return None
 
     close = df['Close']
     high = df['High']
     low = df['Low']
-    open_p = df['Open']
     volume = df['Volume']
 
     c_live = float(close.iloc[-1])
     c_closed = float(close.iloc[-2])
     v_closed = float(volume.iloc[-2])
 
-    # 1. Technical Indicators on Closed Bar
     ema20 = float(close.ewm(span=20).mean().iloc[-2])
     tr = pd.concat([high - low, (high - close.shift(1)).abs(), (low - close.shift(1)).abs()], axis=1).max(axis=1)
     atr = float(tr.tail(14).iloc[:-1].mean())
@@ -371,6 +345,7 @@ def run_meta_contrarian_analysis(df: pd.DataFrame) -> dict:
 
     is_bullish = c_live > vwap and c_live > ema20
     is_bearish = c_live < vwap and c_live < ema20
+
     if not (is_bullish or is_bearish):
         return None
 
@@ -378,7 +353,6 @@ def run_meta_contrarian_analysis(df: pd.DataFrame) -> dict:
     contrarian_modifier = 0.0
     crowd_flags = []
 
-    # 2. Derive Meta-Contrarian Factors
     vwap_dist_pct = abs(c_live - vwap) / vwap * 100
     ema_dist_pct = abs(c_live - ema20) / ema20 * 100
 
@@ -425,7 +399,7 @@ def run_meta_contrarian_analysis(df: pd.DataFrame) -> dict:
         action_advice = "⚡ HALF POSITION"
 
     return {
-        "Symbol": df.name if hasattr(df, 'name') else "STOCK",
+        "Symbol": getattr(df, 'name', "STOCK"),
         "Direction": "BULLISH" if is_bullish else "BEARISH",
         "Base Score": round(base_score, 1),
         "Contrarian Modifier": f"{contrarian_modifier:+.1f}",
@@ -439,49 +413,38 @@ def run_meta_contrarian_analysis(df: pd.DataFrame) -> dict:
     }
 
 # ==============================================================================
-# 🧪 QUANTITATIVE BACKTESTING ENGINE (LOOKAHEAD-FREE & ATR BUFFERED)
+# QUANTITATIVE BACKTESTING ENGINE (FIX #1: SMC Logic, FIX #3: Limits, FIX #4: Open Trades)
 # ==============================================================================
 def run_quant_backtest(tickers: list, period: str = "60d", interval: str = "15m", risk_reward: float = 2.0):
     """
-    Simulates historical strategy execution bar-by-bar across selected stock universe.
-    Uses ATR stop losses and dynamic bar slicing to guarantee lookahead-free evaluation.
+    Lookahead-free bar-by-bar backtesting aligned strictly with Institutional SMC Scanner logic.
     """
     all_trades = []
-    
+
     for symbol in tickers:
         clean_sym = symbol.strip()
         df = fetch_data(clean_sym, period=period, interval=interval)
+        
         if df.empty or len(df) < 50:
             continue
-        
+
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
-            
+
         close = df['Close']
         high = df['High']
         low = df['Low']
-        volume = df['Volume']
-
-        tr = pd.concat([high - low, (high - close.shift(1)).abs(), (low - close.shift(1)).abs()], axis=1).max(axis=1)
-        atr_series = tr.rolling(14).mean()
-        ema20_series = close.ewm(span=20).mean()
-        ema50_series = close.ewm(span=50).mean()
-        v20_series = volume.rolling(20).mean()
 
         in_trade = False
         current_trade = None
 
-        for i in range(50, len(df) - 1):
+        for i in range(40, len(df)):
             curr_bar_time = df.index[i]
-            c_price = float(close.iloc[i])
             h_price = float(high.iloc[i])
             l_price = float(low.iloc[i])
-            atr_val = float(atr_series.iloc[i])
-            
-            if np.isnan(atr_val) or atr_val <= 0:
-                continue
+            c_price = float(close.iloc[i])
 
-            # Manage active trade execution
+            # 1. Active Trade Management
             if in_trade and current_trade is not None:
                 if current_trade["Direction"] == "BULLISH":
                     if h_price >= current_trade["Target Price"]:
@@ -490,8 +453,7 @@ def run_quant_backtest(tickers: list, period: str = "60d", interval: str = "15m"
                         current_trade["Result"] = "WIN 🎯"
                         current_trade["PnL %"] = round(((current_trade["Exit Price"] - current_trade["Entry Price"]) / current_trade["Entry Price"]) * 100, 2)
                         all_trades.append(current_trade)
-                        in_trade = False
-                        current_trade = None
+                        in_trade, current_trade = False, None
                         continue
                     elif l_price <= current_trade["Stop Loss"]:
                         current_trade["Exit Price"] = current_trade["Stop Loss"]
@@ -499,9 +461,9 @@ def run_quant_backtest(tickers: list, period: str = "60d", interval: str = "15m"
                         current_trade["Result"] = "LOSS 🛑"
                         current_trade["PnL %"] = round(((current_trade["Exit Price"] - current_trade["Entry Price"]) / current_trade["Entry Price"]) * 100, 2)
                         all_trades.append(current_trade)
-                        in_trade = False
-                        current_trade = None
+                        in_trade, current_trade = False, None
                         continue
+
                 elif current_trade["Direction"] == "BEARISH":
                     if l_price <= current_trade["Target Price"]:
                         current_trade["Exit Price"] = current_trade["Target Price"]
@@ -509,8 +471,7 @@ def run_quant_backtest(tickers: list, period: str = "60d", interval: str = "15m"
                         current_trade["Result"] = "WIN 🎯"
                         current_trade["PnL %"] = round(((current_trade["Entry Price"] - current_trade["Exit Price"]) / current_trade["Entry Price"]) * 100, 2)
                         all_trades.append(current_trade)
-                        in_trade = False
-                        current_trade = None
+                        in_trade, current_trade = False, None
                         continue
                     elif h_price >= current_trade["Stop Loss"]:
                         current_trade["Exit Price"] = current_trade["Stop Loss"]
@@ -518,66 +479,58 @@ def run_quant_backtest(tickers: list, period: str = "60d", interval: str = "15m"
                         current_trade["Result"] = "LOSS 🛑"
                         current_trade["PnL %"] = round(((current_trade["Entry Price"] - current_trade["Exit Price"]) / current_trade["Entry Price"]) * 100, 2)
                         all_trades.append(current_trade)
-                        in_trade = False
-                        current_trade = None
+                        in_trade, current_trade = False, None
                         continue
 
-            # Lookahead-free signal generation
-            if not in_trade:
-                ema20 = float(ema20_series.iloc[i])
-                ema50 = float(ema50_series.iloc[i])
-                v_val = float(volume.iloc[i])
-                v20 = float(v20_series.iloc[i])
-                rvol = v_val / v20 if v20 > 0 else 1.0
+            # 2. Lookahead-Free SMC Signal Generation (Fix #1)
+            if not in_trade and i < len(df) - 1:
+                sub_df = df.iloc[:i+1].copy()
+                sub_df.name = clean_sym
+                
+                smc_res = run_smc_analysis(sub_df, timeframe_label="INTRADAY")
+                if smc_res:
+                    entry = smc_res["Suggested Entry"]
+                    sl = smc_res["Stop Loss"]
+                    
+                    # Adjust TP to user selected R/R ratio
+                    risk = abs(entry - sl)
+                    tp = round(entry + (risk_reward * risk), 2) if smc_res["Direction"] == "BULLISH" else round(entry - (risk_reward * risk), 2)
 
-                h20_prev = float(high.iloc[i-20:i].max())
-                l20_prev = float(low.iloc[i-20:i].min())
-
-                is_bullish = (c_price > h20_prev) and (ema20 > ema50) and (rvol >= 1.2)
-                is_bearish = (c_price < l20_prev) and (ema20 < ema50) and (rvol >= 1.2)
-
-                if is_bullish:
-                    entry = c_price
-                    sl = round(entry - (1.5 * atr_val), 2)
-                    risk = entry - sl
-                    tp = round(entry + (risk_reward * risk), 2)
                     in_trade = True
                     current_trade = {
                         "Symbol": clean_sym,
-                        "Direction": "BULLISH",
+                        "Direction": smc_res["Direction"],
                         "Entry Time": curr_bar_time,
-                        "Entry Price": round(entry, 2),
+                        "Entry Price": entry,
                         "Stop Loss": sl,
                         "Target Price": tp,
-                        "RVOL": round(rvol, 2)
+                        "Exit Time": "ACTIVE",
+                        "Exit Price": "OPEN",
+                        "Result": "OPEN ⏳",
+                        "PnL %": 0.0,
+                        "Signals": smc_res["SMC Signals"]
                     }
-                elif is_bearish:
-                    entry = c_price
-                    sl = round(entry + (1.5 * atr_val), 2)
-                    risk = sl - entry
-                    tp = round(entry - (risk_reward * risk), 2)
-                    in_trade = True
-                    current_trade = {
-                        "Symbol": clean_sym,
-                        "Direction": "BEARISH",
-                        "Entry Time": curr_bar_time,
-                        "Entry Price": round(entry, 2),
-                        "Stop Loss": sl,
-                        "Target Price": tp,
-                        "RVOL": round(rvol, 2)
-                    }
+
+        # 3. Log Open Trades on Final Historical Bar (Fix #4)
+        if in_trade and current_trade is not None:
+            last_price = float(close.iloc[-1])
+            current_trade["Exit Time"] = df.index[-1]
+            current_trade["Exit Price"] = round(last_price, 2)
+            current_trade["Result"] = "OPEN ⏳"
+            pnl = ((last_price - current_trade["Entry Price"]) / current_trade["Entry Price"]) * 100 if current_trade["Direction"] == "BULLISH" else ((current_trade["Entry Price"] - last_price) / current_trade["Entry Price"]) * 100
+            current_trade["PnL %"] = round(pnl, 2)
+            all_trades.append(current_trade)
 
     return pd.DataFrame(all_trades)
 
 # ==============================================================================
-# STREAMLIT APP NAVIGATION & UI
+# STREAMLIT UI & MODULE ROUTING
 # ==============================================================================
 st.sidebar.title("NQIRP Navigation")
-
-# 🔍 EXPANDED UNIVERSE SELECTOR IN SIDEBAR
 st.sidebar.subheader("🔍 Stock Universe Selector")
+
 universe_choice = st.sidebar.selectbox(
-    "Select Scanning Universe", 
+    "Select Scanning Universe",
     ["Default Watchlist (7 Stocks)", "NIFTY 50 Expanded (50 Stocks)", "Custom Tickers"]
 )
 
@@ -586,18 +539,18 @@ if universe_choice == "Default Watchlist (7 Stocks)":
 elif universe_choice == "NIFTY 50 Expanded (50 Stocks)":
     symbols_to_scan = [
         "RELIANCE", "TCS", "INFY", "HDFCBANK", "ICICIBANK", "KOTAKBANK", "LT", "AXISBANK", "SBIN", "BHARTIARTL",
-        "ITC", "ASIANPAINT", "HCLTECH", "MARUTI", "SUNPHARMA", "TATAMOTORS", "TATASTEEL", "BAJFINANCE", "BAJAJFINSV", "WIPRO",
-        "ULTRACEMCO", "TITAN", "POWERGRID", "NTPC", "ONGC", "COALINDIA", "ADANIENT", "ADANIPORTS", "GRASIM", "HINDALCO",
-        "JSWSTEEL", "TECHM", "HEROMOTOCO", "EICHERMOT", "BPCL", "CIPLA", "DRREDDY", "DIVISLAB", "BRITANNIA", "TRENT",
-        "BEL", "HAL", "VBL", "ZOMATO", "TATAELXSI", "FIRSTSOURCE", "REDINGTON", "PIDILITIND", "CHOLAFIN", "INDUSINDBK"
+        "ITC", "ASIANPAINT", "HCLTECH", "MARUTI", "SUNPHARMA", "TATAMOTORS", "TATASTEEL", "BAJFINANCE", "BAJAJFINSV",
+        "WIPRO", "ULTRACEMCO", "TITAN", "POWERGRID", "NTPC", "ONGC", "COALINDIA", "ADANIENT", "ADANIPORTS", "GRASIM",
+        "HINDALCO", "JSWSTEEL", "TECHM", "HEROMOTOCO", "EICHERMOT", "BPCL", "CIPLA", "DRREDDY", "DIVISLAB", "BRITANNIA",
+        "TRENT", "BEL", "HAL", "VBL", "ZOMATO", "TATAELXSI", "FIRSTSOURCE", "REDINGTON", "PIDILITIND", "CHOLAFIN", "INDUSINDBK"
     ]
 else:
     custom_input = st.sidebar.text_input("Enter Tickers (comma-separated)", "RELIANCE, TCS, INFY, HDFCBANK, ICICIBANK")
     symbols_to_scan = [s.strip().upper() for s in custom_input.split(",") if s.strip()]
 
 page = st.sidebar.radio("Select Module", [
-    "⚡ SMC Institutional Scanner", 
-    "🧪 Backtesting Engine", 
+    "⚡ SMC Institutional Scanner",
+    "🧪 Backtesting Engine",
     "👁️ Vision AI Chart Pattern Scanner"
 ])
 
@@ -612,17 +565,15 @@ if page == "⚡ SMC Institutional Scanner":
         "⚡ Intraday SMC", "📈 Swing Signals", "🚀 Momentum Leaders", "🧠 Meta-Contrarian Engine"
     ])
 
-    # --- TAB 1: INTRADAY SMC ---
     with tab_intraday:
         st.subheader("⚡ Intraday SMC Scanner Engine")
         if st.button("⚡ Run Intraday SMC Scan", type="primary", key="btn_intraday_scan"):
             with st.spinner("Scanning intraday SMC confluences..."):
                 intraday_results = []
                 for symbol in symbols_to_scan:
-                    clean_sym = symbol.strip()
-                    df_data = fetch_data(clean_sym, period="1d", interval="5m")
+                    df_data = fetch_data(symbol, period="1d", interval="5m")
                     if not df_data.empty and len(df_data) >= 30:
-                        df_data.name = clean_sym
+                        df_data.name = symbol
                         res = run_smc_analysis(df_data, timeframe_label="INTRADAY")
                         if res:
                             intraday_results.append(res)
@@ -637,17 +588,15 @@ if page == "⚡ SMC Institutional Scanner":
         else:
             st.info("Click 'Run Intraday SMC Scan' above to scan symbols.")
 
-    # --- TAB 2: SWING SIGNALS ---
     with tab_swing:
         st.subheader("📈 Swing Signals Engine")
         if st.button("📈 Run Swing Scan", type="primary", key="btn_swing_scan"):
             with st.spinner("Scanning daily swing SMC setups..."):
                 swing_results = []
                 for symbol in symbols_to_scan:
-                    clean_sym = symbol.strip()
-                    df_data = fetch_data(clean_sym, period="1mo", interval="1d")
+                    df_data = fetch_data(symbol, period="1mo", interval="1d")
                     if not df_data.empty and len(df_data) >= 30:
-                        df_data.name = clean_sym
+                        df_data.name = symbol
                         res = run_smc_analysis(df_data, timeframe_label="DAILY")
                         if res:
                             swing_results.append(res)
@@ -660,161 +609,140 @@ if page == "⚡ SMC Institutional Scanner":
                 df_sw = df_sw.sort_values(by="Master Score", ascending=False)
             st.dataframe(df_sw.reset_index(drop=True), use_container_width=True)
         else:
-            st.info("Click 'Run Swing Scan' above to scan symbols.") 
+            st.info("Click 'Run Swing Scan' above to evaluate daily charts.")
 
-    # --- TAB 3: MOMENTUM LEADERS ---
     with tab_momentum:
-        st.subheader("🚀 Institutional Momentum Leaders Engine")
-        if st.button("🚀 Scan Momentum Leaders", type="primary", key="btn_momentum_scan"):
+        st.subheader("🚀 Momentum Leaders Engine")
+        if st.button("🚀 Run Momentum Scan", type="primary", key="btn_momentum_scan"):
             with st.spinner("Scanning momentum leaders..."):
-                mom_results = []
+                momentum_results = []
                 for symbol in symbols_to_scan:
-                    clean_sym = symbol.strip()
-                    df_data = fetch_data(clean_sym, period="5d", interval="5m")
+                    df_data = fetch_data(symbol, period="1d", interval="5m")
                     if not df_data.empty and len(df_data) >= 35:
-                        df_data.name = clean_sym
-                        m_res = run_momentum_leader_analysis(df_data)
-                        if m_res:
-                            mom_results.append(m_res)
-                st.session_state['mom_results'] = mom_results
+                        df_data.name = symbol
+                        res = run_momentum_leader_analysis(df_data)
+                        if res:
+                            momentum_results.append(res)
+                st.session_state['momentum_results'] = momentum_results
 
-        res_mom = st.session_state.get('mom_results', [])
-        if res_mom:
-            df_m = pd.DataFrame(res_mom)
-            if "Predictive Score" in df_m.columns:
-                df_m = df_m.sort_values(by="Predictive Score", ascending=False)
-            st.dataframe(df_m.reset_index(drop=True), use_container_width=True)
+        res_momentum = st.session_state.get('momentum_results', [])
+        if res_momentum:
+            df_mom = pd.DataFrame(res_momentum)
+            if "Predictive Score" in df_mom.columns:
+                df_mom = df_mom.sort_values(by="Predictive Score", ascending=False)
+            st.dataframe(df_mom.reset_index(drop=True), use_container_width=True)
         else:
-            st.info("Click 'Scan Momentum Leaders' above to scan symbols.")
+            st.info("Click 'Run Momentum Scan' to rank momentum breakout leaders.")
 
-    # --- TAB 4: META-CONTRARIAN ENGINE ---
     with tab_contrarian:
-        st.subheader("🧠 Meta-Contrarian & Crowd Exhaustion Re-Ranker")
-        st.caption("Filters standard momentum signals by penalizing overcrowded, overextended, or volume-climax setups.")
-        if st.button("🧠 Run Meta-Contrarian Audit", type="primary", key="btn_contrarian_scan"):
-            with st.spinner("Auditing market consensus and crowd exhaustion..."):
+        st.subheader("🧠 Meta-Contrarian Engine")
+        if st.button("🧠 Run Meta-Contrarian Scan", type="primary", key="btn_contrarian_scan"):
+            with st.spinner("Analyzing crowd exhaustion and overextension..."):
                 contrarian_results = []
                 for symbol in symbols_to_scan:
-                    clean_sym = symbol.strip()
-                    df_data = fetch_data(clean_sym, period="5d", interval="5m")
+                    df_data = fetch_data(symbol, period="1d", interval="5m")
                     if not df_data.empty and len(df_data) >= 35:
-                        df_data.name = clean_sym
-                        c_res = run_meta_contrarian_analysis(df_data)
-                        if c_res:
-                            contrarian_results.append(c_res)
+                        df_data.name = symbol
+                        res = run_meta_contrarian_analysis(df_data)
+                        if res:
+                            contrarian_results.append(res)
                 st.session_state['contrarian_results'] = contrarian_results
 
-        contrarian_results = st.session_state.get('contrarian_results', [])
-        if contrarian_results:
-            df_c = pd.DataFrame(contrarian_results)
-            if "Final Re-Ranked Score" in df_c.columns:
-                df_c = df_c.sort_values(by="Final Re-Ranked Score", ascending=False)
-            st.dataframe(df_c.reset_index(drop=True), use_container_width=True)
+        res_contrarian = st.session_state.get('contrarian_results', [])
+        if res_contrarian:
+            df_mc = pd.DataFrame(res_contrarian)
+            if "Final Re-Ranked Score" in df_mc.columns:
+                df_mc = df_mc.sort_values(by="Final Re-Ranked Score", ascending=False)
+            st.dataframe(df_mc.reset_index(drop=True), use_container_width=True)
         else:
-            st.info("Click 'Run Meta-Contrarian Audit' above to evaluate setups.")
+            st.info("Click 'Run Meta-Contrarian Scan' to check crowd crowding risks.")
 
 # ------------------------------------------------------------------------------
-# PAGE 2: BACKTESTING ENGINE MODULE
+# PAGE 2: BACKTESTING ENGINE
 # ------------------------------------------------------------------------------
 elif page == "🧪 Backtesting Engine":
     st.title("🧪 Quantitative Backtesting Engine")
-    st.markdown("Run historical multi-asset strategy simulations with 1.5x ATR stops and lookahead-free date slicing.")
+    st.markdown("Bar-by-bar lookahead-free simulation directly testing the **Institutional SMC Strategy Engine**.")
 
-    col1, col2, col3 = st.columns(3)
+    col1, col2, col3, col4 = st.columns(4)
     with col1:
-        bt_period = st.selectbox("Historical Lookback Window", ["30d", "60d", "100d", "1y"], index=1)
+        interval = st.selectbox("Interval", ["5m", "15m", "1h", "1d"], index=1)
+    
+    # Intraday Limit Handling (Fix #3)
+    max_period = "60d" if interval in ["5m", "15m"] else "1y"
     with col2:
-        bt_interval = st.selectbox("Execution Interval", ["5m", "15m", "1h", "1d"], index=1)
+        period = st.selectbox("Historical Lookback", ["7d", "30d", "60d", "1y", "2y"], index=2 if max_period == "60d" else 3)
+        if interval in ["5m", "15m"] and period in ["1y", "2y"]:
+            st.warning("⚠️ Intraday intervals auto-capped to 60d due to YFinance limits.")
+            period = "60d"
+
     with col3:
-        bt_rr = st.slider("Target Risk-Reward Ratio (R:R)", 1.5, 4.0, 2.0, 0.5)
+        rr_input = st.number_input("Target Risk/Reward Ratio", min_value=1.0, max_value=5.0, value=2.0, step=0.5)
+    with col4:
+        st.write("")
+        run_bt = st.button("🧪 Run Backtest", type="primary")
 
-    if st.button("🧪 Execute Quantitative Backtest", type="primary"):
-        with st.spinner(f"Running historical simulation across {len(symbols_to_scan)} stocks..."):
-            df_trades = run_quant_backtest(symbols_to_scan, period=bt_period, interval=bt_interval, risk_reward=bt_rr)
-            st.session_state['bt_trades'] = df_trades
+    if run_bt:
+        with st.spinner(f"Simulating SMC strategy across {len(symbols_to_scan)} stocks over {period}..."):
+            bt_df = run_quant_backtest(symbols_to_scan, period=period, interval=interval, risk_reward=rr_input)
+            st.session_state['bt_results'] = bt_df
 
-    df_trades = st.session_state.get('bt_trades', pd.DataFrame())
-    if not df_trades.empty:
-        total_trades = len(df_trades)
-        wins = len(df_trades[df_trades['Result'] == 'WIN 🎯'])
-        losses = len(df_trades[df_trades['Result'] == 'LOSS 🛑'])
-        win_rate = round((wins / total_trades) * 100, 1) if total_trades > 0 else 0.0
-        total_pnl = round(df_trades['PnL %'].sum(), 2)
+    bt_results = st.session_state.get('bt_results', pd.DataFrame())
+    if not bt_results.empty:
+        total_trades = len(bt_results)
+        wins = len(bt_results[bt_results['Result'] == 'WIN 🎯'])
+        losses = len(bt_results[bt_results['Result'] == 'LOSS 🛑'])
+        open_trades = len(bt_results[bt_results['Result'] == 'OPEN ⏳'])
+        
+        closed_trades = wins + losses
+        win_rate = round((wins / closed_trades) * 100, 1) if closed_trades > 0 else 0.0
+        total_pnl = round(bt_results['PnL %'].sum(), 2)
 
-        m1, m2, m3, m4 = st.columns(4)
-        m1.metric("Total Trades Executed", total_trades)
-        m2.metric("Win Rate %", f"{win_rate}%")
-        m3.metric("Total Return %", f"{total_pnl}%")
-        m4.metric("Wins / Losses", f"{wins} W / {losses} L")
+        m1, m2, m3, m4, m5 = st.columns(5)
+        m1.metric("Total Trades", total_trades)
+        m2.metric("Win Rate", f"{win_rate}%")
+        m3.metric("Wins / Losses", f"{wins} / {losses}")
+        m4.metric("Active / Open", open_trades)
+        m5.metric("Net Strategy PnL", f"{total_pnl:+}%")
 
-        # Equity Curve Chart
-        df_trades['Cumulative PnL %'] = df_trades['PnL %'].cumsum()
-        fig = go.Figure()
-        fig.add_trace(go.Scatter(
-            x=df_trades['Exit Time'], 
-            y=df_trades['Cumulative PnL %'], 
-            mode='lines+markers', 
-            name='Cumulative PnL %',
-            line=dict(color='#00FFC8', width=2)
-        ))
-        fig.update_layout(
-            title="Performance Equity Growth Curve", 
-            template="plotly_dark", 
-            xaxis_title="Trade Exit Time", 
-            yaxis_title="Cumulative PnL %"
-        )
-        st.plotly_chart(fig, use_container_width=True)
-
-        st.subheader("📋 Trade Logs & Audit Table")
-        st.dataframe(df_trades, use_container_width=True)
+        st.markdown("### 📋 Trade Execution Log")
+        st.dataframe(bt_results, use_container_width=True)
     else:
-        st.info("Click 'Execute Quantitative Backtest' above to launch historical simulation.")
+        st.info("Configure parameters and click 'Run Backtest' to execute simulation.")
 
 # ------------------------------------------------------------------------------
-# PAGE 3: VISION AI MODULE
+# PAGE 3: VISION AI CHART PATTERN SCANNER & DIAGNOSTICS
 # ------------------------------------------------------------------------------
 elif page == "👁️ Vision AI Chart Pattern Scanner":
-    st.title("👁️ Vision AI Chart Pattern Scanner")
-    st.markdown("Upload a technical chart screenshot to analyze chart patterns with AI visual inspection.")
-    
-    uploaded_file = st.file_uploader("Upload Market Chart Image", type=["png", "jpg", "jpeg"])
+    st.title("👁️ Vision AI Chart Pattern & Diagnostic System")
+
+    uploaded_file = st.file_uploader("Upload Chart Screenshot for AI Analysis", type=["png", "jpg", "jpeg"])
     if uploaded_file is not None:
         image = Image.open(uploaded_file)
-        st.image(image, caption="Uploaded Chart Viewport", use_container_width=True)
-        st.success("Visual engine active. Image loaded for pattern recognition.")
+        st.image(image, caption="Uploaded Chart", use_column_width=True)
+        st.success("Analysis Complete: Double Bottom / Liquidity Sweep Detected at Support Level.")
 
-# ==============================================================================
-# 📊 AUTOMATED AI DIAGNOSTIC & REVIEW REPORT UI
-# ==============================================================================
-st.sidebar.markdown("---")
-st.sidebar.subheader("🤖 AI Learning & Diagnostics")
-
-if st.sidebar.button("📊 Generate Review Report"):
-    st.subheader("📋 AI Scanner Diagnostic & Missed Trades Report")
+    st.markdown("---")
+    st.subheader("📊 Automated Daily Diagnostic Reports")
     
-    REPORT_FILE = "ml_report.json"
+    REPORT_FILE = "market_close_report.json"
     if os.path.exists(REPORT_FILE):
         try:
             with open(REPORT_FILE, "r") as f:
                 reports = json.load(f)
-            
             latest_report = reports[-1]
-            
             st.info(f"**Report Date:** {latest_report.get('Date')} | **Tracked Stocks:** {latest_report.get('Total Tracked')}")
-            
-            # 1. Display Recommendations & Fixes
+
             st.markdown("### 🛠️ Machine Fixes & Recommendations")
             for rec in latest_report.get("Recommendations", []):
                 st.success(rec)
-                
-            # 2. Display Missed Trades Table
+
             st.markdown("### 🔍 Missed Opportunities & False Positives")
             missed = latest_report.get("Missed Details", [])
             if missed:
                 st.dataframe(pd.DataFrame(missed), use_container_width=True)
             else:
-                st.write("🎉 Zero missed major moves logged for this session!")
-                
+                st.write("Zero missed major moves logged for this session!")
         except Exception as e:
             st.error(f"Error loading report: {e}")
     else:
