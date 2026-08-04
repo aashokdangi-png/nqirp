@@ -205,8 +205,8 @@ def run_smc_analysis(df: pd.DataFrame, timeframe_label="INTRADAY"):
 def run_momentum_leader_analysis(df: pd.DataFrame):
     """
     Non-Breaking Institutional Momentum Engine.
-    Preserves all legacy return keys and UI table schemas while fixing
-    price teleportation, RVOL flickering, and overextension tracking.
+    Fixes KeyError by explicitly returning 'Predictive Score', while locking entry 
+    anchors and eliminating 5-second indicator flickering.
     """
     if df.empty or len(df) < 35:
         return None
@@ -239,7 +239,7 @@ def run_momentum_leader_analysis(df: pd.DataFrame):
     v20 = float(volume.tail(20).mean())
     rvol = v_closed / v20 if v20 > 0 else 1.0
 
-    # 2. Fixed Structural Trigger (Anchored Level)
+    # 2. Fixed Structural Trigger
     h20_breakout = float(high.tail(30).iloc[:-2].max())
     l20_breakout = float(low.tail(30).iloc[:-2].min())
 
@@ -251,7 +251,6 @@ def run_momentum_leader_analysis(df: pd.DataFrame):
 
     direction = "🔥 BULLISH MOMENTUM" if is_bullish else "🩸 BEARISH MOMENTUM"
 
-    # Fixed Trigger Anchor (Suggested Entry no longer moves with current price)
     if is_bullish:
         suggested_entry = round(max(vwap_anchor, h20_breakout), 2)
         dist_from_trigger_pct = ((c_live - suggested_entry) / suggested_entry) * 100
@@ -263,6 +262,10 @@ def run_momentum_leader_analysis(df: pd.DataFrame):
         stop_loss = round(suggested_entry + (1.0 * atr), 2)
         target_price = round(suggested_entry - (2.5 * atr), 2)
 
+    # Calculate Predictive Score (Fixes KeyError)
+    day_change_pct = round(((c_live - open_p.iloc[0]) / open_p.iloc[0]) * 100, 2)
+    predictive_score = 50.0 + min(rvol * 12.0, 25.0) + min(abs(day_change_pct) * 10.0, 25.0)
+
     # 3. Dynamic Status Tracking
     if dist_from_trigger_pct < 0.1:
         trade_status = "🎯 AT BREAKOUT TRIGGER"
@@ -271,7 +274,6 @@ def run_momentum_leader_analysis(df: pd.DataFrame):
     else:
         trade_status = f"⚠️ OVEREXTENDED (+{round(dist_from_trigger_pct, 2)}% moved)"
 
-    # Filter out entries that have already run > 1.2% past trigger
     if dist_from_trigger_pct > 1.2:
         return None
 
@@ -279,23 +281,21 @@ def run_momentum_leader_analysis(df: pd.DataFrame):
     actual_reward = abs(target_price - suggested_entry)
     rr_ratio = round(actual_reward / actual_risk, 2) if actual_risk > 0 else 2.5
 
-    day_change_pct = round(((c_live - open_p.iloc[0]) / open_p.iloc[0]) * 100, 2)
-    
     # ML Model Inference
     ml_out = predict_trade_probability(rvol, abs(c_live - vwap_anchor)/vwap_anchor*100, (atr/c_live)*100, day_change_pct, True, 0.5)
 
-    # 4. Strict Non-Breaking Return Schema (Includes all original keys)
     return {
         "Symbol": df.name if hasattr(df, 'name') else "STOCK",
         "Direction": direction,
+        "Predictive Score": round(predictive_score, 1), # Fixed: Restored missing key
         "Current Price": round(c_live, 2),
-        "Suggested Entry": suggested_entry,         # FIXED ANCHOR (No longer teleports)
-        "Breakout Distance": f"{round(dist_from_trigger_pct, 2)}%",  # Added safety metric
-        "Day Change %": f"{day_change_pct}%",         # Preserved original UI field
-        "RVOL": round(rvol, 2),                       # Stable closed-candle RVOL
-        "Status": trade_status,                       # Enhanced with breakout distance
-        "Stop Loss": stop_loss,                       # Anchored from trigger
-        "Target Price": target_price,                 # Anchored from trigger
+        "Suggested Entry": suggested_entry,
+        "Breakout Distance": f"{round(dist_from_trigger_pct, 2)}%",
+        "Day Change %": f"{day_change_pct}%",
+        "RVOL": round(rvol, 2),
+        "Status": trade_status,
+        "Stop Loss": stop_loss,
+        "Target Price": target_price,
         "R/R Ratio": f"1 : {rr_ratio}",
         "AI Win Prob": ml_out["AI Win Prob"],
         "Trap Risk": ml_out["Trap Risk"]
@@ -397,12 +397,13 @@ if page == "⚡ SMC Institutional Scanner":
                 st.session_state['momentum_results'] = momentum_results
 
         momentum_results = st.session_state.get('momentum_results', [])
-        if momentum_results:
-            df_mom = pd.DataFrame(momentum_results).sort_values(by="Predictive Score", ascending=False).reset_index(drop=True)
-            st.dataframe(df_mom, use_container_width=True)
+       if momentum_results:
+            df_mom = pd.DataFrame(momentum_results)
+            if "Predictive Score" in df_mom.columns:
+                df_mom = df_mom.sort_values(by="Predictive Score", ascending=False)
+            st.dataframe(df_mom.reset_index(drop=True), use_container_width=True)
         else:
             st.info("Click 'Scan Momentum Leaders' above to trigger scanning.")
-
 # ==============================================================================
 # VISION AI MODULE
 # ==============================================================================
