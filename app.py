@@ -4,6 +4,24 @@ import numpy as np
 import plotly.graph_objects as go
 from PIL import Image
 import os
+import yfinance as yf
+import pickle
+import json
+
+@st.cache_data(ttl=3600, show_spinner="Fetching stock data...")
+def fetch_universe_data(tickers: list) -> dict:
+    formatted_tickers = [t if t.endswith(('.NS', '.BO')) else f"{t}.NS" for t in tickers]
+    data = yf.download(formatted_tickers, period="1y", interval="1d", group_by="ticker", threads=True, progress=False)
+    
+    stock_dict = {}
+    for sym in formatted_tickers:
+        try:
+            df = data[sym].dropna(subset=['Close']) if len(formatted_tickers) > 1 else data.dropna(subset=['Close'])
+            if len(df) >= 50:
+                stock_dict[sym] = df
+        except Exception:
+            continue
+    return stock_dict
 
 st.set_page_config(
     page_title="NQIRP Institutional Quant Engine",
@@ -11,9 +29,6 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
-import yfinance as yf
-import os
-import pickle
 
 # Load pre-trained model if available in repository
 MODEL_PATH = "model.pkl"
@@ -56,12 +71,14 @@ def predict_trade_probability(rvol: float, vwap_dist_pct: float, atr_pct: float,
         "AI Win Prob": f"{round(prob, 1)}%",
         "Trap Risk": trap_risk
     }
+
 def fetch_data(symbol, period="1d", interval="5m"):
     ticker_sym = f"{symbol}.NS" if not symbol.endswith(".NS") else symbol
     df = yf.download(ticker_sym, period=period, interval=interval, progress=False)
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
     return df
+
 # ==============================================================================
 # QUANTITATIVE SMC ENGINE (INTRADAY vs DAILY)
 # ==============================================================================
@@ -192,7 +209,6 @@ def run_smc_analysis(df: pd.DataFrame, timeframe_label="INTRADAY"):
 
     ml_out = predict_trade_probability(rvol, vwap_dist_pct, atr_pct, pct_change, ema_aligned, range_pos)
 
-    # 100% PRESERVED DICTIONARY SCHEMA
     return {
         "Symbol": df.name if hasattr(df, 'name') else "STOCK",
         "Direction": direction,
@@ -200,12 +216,12 @@ def run_smc_analysis(df: pd.DataFrame, timeframe_label="INTRADAY"):
         "AI Win Prob": ml_out["AI Win Prob"],
         "Trap Risk": ml_out["Trap Risk"],
         "Trade Action": "✅ SWING ENTRY" if timeframe_label == "DAILY" else "✅ ACTIVE ENTRY",
-        "Suggested Entry": suggested_entry,         # FIXED TRIGGER ANCHOR
-        "Current Price": round(c_live, 2),          # LIVE TICK PRICE
+        "Suggested Entry": suggested_entry,
+        "Current Price": round(c_live, 2),
         "Target Price": target_price,
         "Stop Loss": stop_loss,
         "R/R Ratio": f"1 : {rr_ratio}",
-        "RVOL": round(rvol, 2),                     # STABLE CLOSED BAR RVOL
+        "RVOL": round(rvol, 2),
         "SMC Signals": ", ".join(smc_confluences)
     }
 
@@ -272,7 +288,6 @@ def run_momentum_leader_analysis(df: pd.DataFrame):
         stop_loss = round(suggested_entry + (1.0 * atr), 2)
         target_price = round(suggested_entry - (2.5 * atr), 2)
 
-    # Calculate Predictive Score (Fixes KeyError)
     day_change_pct = round(((c_live - open_p.iloc[0]) / open_p.iloc[0]) * 100, 2)
     predictive_score = 50.0 + min(rvol * 12.0, 25.0) + min(abs(day_change_pct) * 10.0, 25.0)
 
@@ -291,13 +306,12 @@ def run_momentum_leader_analysis(df: pd.DataFrame):
     actual_reward = abs(target_price - suggested_entry)
     rr_ratio = round(actual_reward / actual_risk, 2) if actual_risk > 0 else 2.5
 
-    # ML Model Inference
     ml_out = predict_trade_probability(rvol, abs(c_live - vwap_anchor)/vwap_anchor*100, (atr/c_live)*100, day_change_pct, True, 0.5)
 
     return {
         "Symbol": df.name if hasattr(df, 'name') else "STOCK",
         "Direction": direction,
-        "Predictive Score": round(predictive_score, 1), # Fixed: Restored missing key
+        "Predictive Score": round(predictive_score, 1),
         "Current Price": round(c_live, 2),
         "Suggested Entry": suggested_entry,
         "Breakout Distance": f"{round(dist_from_trigger_pct, 2)}%",
@@ -310,6 +324,7 @@ def run_momentum_leader_analysis(df: pd.DataFrame):
         "AI Win Prob": ml_out["AI Win Prob"],
         "Trap Risk": ml_out["Trap Risk"]
     }
+
 # ==============================================================================
 # 🧠 META-CONTRARIAN & CROWD EXHAUSTION ENGINE (ISOLATED MODULE)
 # ==============================================================================
@@ -424,16 +439,174 @@ def run_meta_contrarian_analysis(df: pd.DataFrame) -> dict:
     }
 
 # ==============================================================================
+# 🧪 QUANTITATIVE BACKTESTING ENGINE (LOOKAHEAD-FREE & ATR BUFFERED)
+# ==============================================================================
+def run_quant_backtest(tickers: list, period: str = "60d", interval: str = "15m", risk_reward: float = 2.0):
+    """
+    Simulates historical strategy execution bar-by-bar across selected stock universe.
+    Uses ATR stop losses and dynamic bar slicing to guarantee lookahead-free evaluation.
+    """
+    all_trades = []
+    
+    for symbol in tickers:
+        clean_sym = symbol.strip()
+        df = fetch_data(clean_sym, period=period, interval=interval)
+        if df.empty or len(df) < 50:
+            continue
+        
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
+            
+        close = df['Close']
+        high = df['High']
+        low = df['Low']
+        volume = df['Volume']
+
+        tr = pd.concat([high - low, (high - close.shift(1)).abs(), (low - close.shift(1)).abs()], axis=1).max(axis=1)
+        atr_series = tr.rolling(14).mean()
+        ema20_series = close.ewm(span=20).mean()
+        ema50_series = close.ewm(span=50).mean()
+        v20_series = volume.rolling(20).mean()
+
+        in_trade = False
+        current_trade = None
+
+        for i in range(50, len(df) - 1):
+            curr_bar_time = df.index[i]
+            c_price = float(close.iloc[i])
+            h_price = float(high.iloc[i])
+            l_price = float(low.iloc[i])
+            atr_val = float(atr_series.iloc[i])
+            
+            if np.isnan(atr_val) or atr_val <= 0:
+                continue
+
+            # Manage active trade execution
+            if in_trade and current_trade is not None:
+                if current_trade["Direction"] == "BULLISH":
+                    if h_price >= current_trade["Target Price"]:
+                        current_trade["Exit Price"] = current_trade["Target Price"]
+                        current_trade["Exit Time"] = curr_bar_time
+                        current_trade["Result"] = "WIN 🎯"
+                        current_trade["PnL %"] = round(((current_trade["Exit Price"] - current_trade["Entry Price"]) / current_trade["Entry Price"]) * 100, 2)
+                        all_trades.append(current_trade)
+                        in_trade = False
+                        current_trade = None
+                        continue
+                    elif l_price <= current_trade["Stop Loss"]:
+                        current_trade["Exit Price"] = current_trade["Stop Loss"]
+                        current_trade["Exit Time"] = curr_bar_time
+                        current_trade["Result"] = "LOSS 🛑"
+                        current_trade["PnL %"] = round(((current_trade["Exit Price"] - current_trade["Entry Price"]) / current_trade["Entry Price"]) * 100, 2)
+                        all_trades.append(current_trade)
+                        in_trade = False
+                        current_trade = None
+                        continue
+                elif current_trade["Direction"] == "BEARISH":
+                    if l_price <= current_trade["Target Price"]:
+                        current_trade["Exit Price"] = current_trade["Target Price"]
+                        current_trade["Exit Time"] = curr_bar_time
+                        current_trade["Result"] = "WIN 🎯"
+                        current_trade["PnL %"] = round(((current_trade["Entry Price"] - current_trade["Exit Price"]) / current_trade["Entry Price"]) * 100, 2)
+                        all_trades.append(current_trade)
+                        in_trade = False
+                        current_trade = None
+                        continue
+                    elif h_price >= current_trade["Stop Loss"]:
+                        current_trade["Exit Price"] = current_trade["Stop Loss"]
+                        current_trade["Exit Time"] = curr_bar_time
+                        current_trade["Result"] = "LOSS 🛑"
+                        current_trade["PnL %"] = round(((current_trade["Entry Price"] - current_trade["Exit Price"]) / current_trade["Entry Price"]) * 100, 2)
+                        all_trades.append(current_trade)
+                        in_trade = False
+                        current_trade = None
+                        continue
+
+            # Lookahead-free signal generation
+            if not in_trade:
+                ema20 = float(ema20_series.iloc[i])
+                ema50 = float(ema50_series.iloc[i])
+                v_val = float(volume.iloc[i])
+                v20 = float(v20_series.iloc[i])
+                rvol = v_val / v20 if v20 > 0 else 1.0
+
+                h20_prev = float(high.iloc[i-20:i].max())
+                l20_prev = float(low.iloc[i-20:i].min())
+
+                is_bullish = (c_price > h20_prev) and (ema20 > ema50) and (rvol >= 1.2)
+                is_bearish = (c_price < l20_prev) and (ema20 < ema50) and (rvol >= 1.2)
+
+                if is_bullish:
+                    entry = c_price
+                    sl = round(entry - (1.5 * atr_val), 2)
+                    risk = entry - sl
+                    tp = round(entry + (risk_reward * risk), 2)
+                    in_trade = True
+                    current_trade = {
+                        "Symbol": clean_sym,
+                        "Direction": "BULLISH",
+                        "Entry Time": curr_bar_time,
+                        "Entry Price": round(entry, 2),
+                        "Stop Loss": sl,
+                        "Target Price": tp,
+                        "RVOL": round(rvol, 2)
+                    }
+                elif is_bearish:
+                    entry = c_price
+                    sl = round(entry + (1.5 * atr_val), 2)
+                    risk = sl - entry
+                    tp = round(entry - (risk_reward * risk), 2)
+                    in_trade = True
+                    current_trade = {
+                        "Symbol": clean_sym,
+                        "Direction": "BEARISH",
+                        "Entry Time": curr_bar_time,
+                        "Entry Price": round(entry, 2),
+                        "Stop Loss": sl,
+                        "Target Price": tp,
+                        "RVOL": round(rvol, 2)
+                    }
+
+    return pd.DataFrame(all_trades)
+
+# ==============================================================================
 # STREAMLIT APP NAVIGATION & UI
 # ==============================================================================
 st.sidebar.title("NQIRP Navigation")
-page = st.sidebar.radio("Select Module", ["⚡ SMC Institutional Scanner", "👁️ Vision AI Chart Pattern Scanner"])
 
+# 🔍 EXPANDED UNIVERSE SELECTOR IN SIDEBAR
+st.sidebar.subheader("🔍 Stock Universe Selector")
+universe_choice = st.sidebar.selectbox(
+    "Select Scanning Universe", 
+    ["Default Watchlist (7 Stocks)", "NIFTY 50 Expanded (50 Stocks)", "Custom Tickers"]
+)
+
+if universe_choice == "Default Watchlist (7 Stocks)":
+    symbols_to_scan = ["REDINGTON", "FIRSTSOURCE", "RELIANCE", "TCS", "INFY", "HDFCBANK", "ICICIBANK"]
+elif universe_choice == "NIFTY 50 Expanded (50 Stocks)":
+    symbols_to_scan = [
+        "RELIANCE", "TCS", "INFY", "HDFCBANK", "ICICIBANK", "KOTAKBANK", "LT", "AXISBANK", "SBIN", "BHARTIARTL",
+        "ITC", "ASIANPAINT", "HCLTECH", "MARUTI", "SUNPHARMA", "TATAMOTORS", "TATASTEEL", "BAJFINANCE", "BAJAJFINSV", "WIPRO",
+        "ULTRACEMCO", "TITAN", "POWERGRID", "NTPC", "ONGC", "COALINDIA", "ADANIENT", "ADANIPORTS", "GRASIM", "HINDALCO",
+        "JSWSTEEL", "TECHM", "HEROMOTOCO", "EICHERMOT", "BPCL", "CIPLA", "DRREDDY", "DIVISLAB", "BRITANNIA", "TRENT",
+        "BEL", "HAL", "VBL", "ZOMATO", "TATAELXSI", "FIRSTSOURCE", "REDINGTON", "PIDILITIND", "CHOLAFIN", "INDUSINDBK"
+    ]
+else:
+    custom_input = st.sidebar.text_input("Enter Tickers (comma-separated)", "RELIANCE, TCS, INFY, HDFCBANK, ICICIBANK")
+    symbols_to_scan = [s.strip().upper() for s in custom_input.split(",") if s.strip()]
+
+page = st.sidebar.radio("Select Module", [
+    "⚡ SMC Institutional Scanner", 
+    "🧪 Backtesting Engine", 
+    "👁️ Vision AI Chart Pattern Scanner"
+])
+
+# ------------------------------------------------------------------------------
+# PAGE 1: SMC INSTITUTIONAL SCANNER
+# ------------------------------------------------------------------------------
 if page == "⚡ SMC Institutional Scanner":
     st.title("⚡ SMC Institutional Scanner Engine")
-    st.markdown("Real-time multi-timeframe quantitative scanning for SMC confluences, FVG, BOS, and Momentum Leaders.")
-
-    symbols_to_scan = ["REDINGTON", "FIRSTSOURCE", "RELIANCE", "TCS", "INFY", "HDFCBANK", "ICICIBANK"]
+    st.markdown(f"Real-time multi-timeframe quantitative scanning across **{len(symbols_to_scan)} stocks** for SMC confluences, FVG, BOS, and Momentum Leaders.")
 
     tab_intraday, tab_swing, tab_momentum, tab_contrarian = st.tabs([
         "⚡ Intraday SMC", "📈 Swing Signals", "🚀 Momentum Leaders", "🧠 Meta-Contrarian Engine"
@@ -464,7 +637,7 @@ if page == "⚡ SMC Institutional Scanner":
         else:
             st.info("Click 'Run Intraday SMC Scan' above to scan symbols.")
 
- # --- TAB 2: SWING SIGNALS ---
+    # --- TAB 2: SWING SIGNALS ---
     with tab_swing:
         st.subheader("📈 Swing Signals Engine")
         if st.button("📈 Run Swing Scan", type="primary", key="btn_swing_scan"):
@@ -539,11 +712,67 @@ if page == "⚡ SMC Institutional Scanner":
             st.dataframe(df_c.reset_index(drop=True), use_container_width=True)
         else:
             st.info("Click 'Run Meta-Contrarian Audit' above to evaluate setups.")
-  
 
-# ==============================================================================
-# VISION AI MODULE
-# ==============================================================================
+# ------------------------------------------------------------------------------
+# PAGE 2: BACKTESTING ENGINE MODULE
+# ------------------------------------------------------------------------------
+elif page == "🧪 Backtesting Engine":
+    st.title("🧪 Quantitative Backtesting Engine")
+    st.markdown("Run historical multi-asset strategy simulations with 1.5x ATR stops and lookahead-free date slicing.")
+
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        bt_period = st.selectbox("Historical Lookback Window", ["30d", "60d", "100d", "1y"], index=1)
+    with col2:
+        bt_interval = st.selectbox("Execution Interval", ["5m", "15m", "1h", "1d"], index=1)
+    with col3:
+        bt_rr = st.slider("Target Risk-Reward Ratio (R:R)", 1.5, 4.0, 2.0, 0.5)
+
+    if st.button("🧪 Execute Quantitative Backtest", type="primary"):
+        with st.spinner(f"Running historical simulation across {len(symbols_to_scan)} stocks..."):
+            df_trades = run_quant_backtest(symbols_to_scan, period=bt_period, interval=bt_interval, risk_reward=bt_rr)
+            st.session_state['bt_trades'] = df_trades
+
+    df_trades = st.session_state.get('bt_trades', pd.DataFrame())
+    if not df_trades.empty:
+        total_trades = len(df_trades)
+        wins = len(df_trades[df_trades['Result'] == 'WIN 🎯'])
+        losses = len(df_trades[df_trades['Result'] == 'LOSS 🛑'])
+        win_rate = round((wins / total_trades) * 100, 1) if total_trades > 0 else 0.0
+        total_pnl = round(df_trades['PnL %'].sum(), 2)
+
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Total Trades Executed", total_trades)
+        m2.metric("Win Rate %", f"{win_rate}%")
+        m3.metric("Total Return %", f"{total_pnl}%")
+        m4.metric("Wins / Losses", f"{wins} W / {losses} L")
+
+        # Equity Curve Chart
+        df_trades['Cumulative PnL %'] = df_trades['PnL %'].cumsum()
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(
+            x=df_trades['Exit Time'], 
+            y=df_trades['Cumulative PnL %'], 
+            mode='lines+markers', 
+            name='Cumulative PnL %',
+            line=dict(color='#00FFC8', width=2)
+        ))
+        fig.update_layout(
+            title="Performance Equity Growth Curve", 
+            template="plotly_dark", 
+            xaxis_title="Trade Exit Time", 
+            yaxis_title="Cumulative PnL %"
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+        st.subheader("📋 Trade Logs & Audit Table")
+        st.dataframe(df_trades, use_container_width=True)
+    else:
+        st.info("Click 'Execute Quantitative Backtest' above to launch historical simulation.")
+
+# ------------------------------------------------------------------------------
+# PAGE 3: VISION AI MODULE
+# ------------------------------------------------------------------------------
 elif page == "👁️ Vision AI Chart Pattern Scanner":
     st.title("👁️ Vision AI Chart Pattern Scanner")
     st.markdown("Upload a technical chart screenshot to analyze chart patterns with AI visual inspection.")
@@ -553,6 +782,7 @@ elif page == "👁️ Vision AI Chart Pattern Scanner":
         image = Image.open(uploaded_file)
         st.image(image, caption="Uploaded Chart Viewport", use_container_width=True)
         st.success("Visual engine active. Image loaded for pattern recognition.")
+
 # ==============================================================================
 # 📊 AUTOMATED AI DIAGNOSTIC & REVIEW REPORT UI
 # ==============================================================================
@@ -568,7 +798,7 @@ if st.sidebar.button("📊 Generate Review Report"):
             with open(REPORT_FILE, "r") as f:
                 reports = json.load(f)
             
-            latest_report = reports[-1]  # Get most recent report
+            latest_report = reports[-1]
             
             st.info(f"**Report Date:** {latest_report.get('Date')} | **Tracked Stocks:** {latest_report.get('Total Tracked')}")
             
