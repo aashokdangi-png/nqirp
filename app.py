@@ -464,7 +464,7 @@ if page == "⚡ SMC Institutional Scanner":
         else:
             st.info("Click 'Run Intraday SMC Scan' above to scan symbols.")
 
-   # --- TAB 2: SWING SIGNALS ---
+ # --- TAB 2: SWING SIGNALS ---
     with tab_swing:
         st.subheader("📈 Swing Signals Engine")
         if st.button("📈 Run Swing Scan", type="primary", key="btn_swing_scan"):
@@ -472,9 +472,7 @@ if page == "⚡ SMC Institutional Scanner":
                 swing_results = []
                 for symbol in symbols_to_scan:
                     clean_sym = symbol.strip()
-                    # Append .NS suffix so yfinance can pull Indian stock data
-                    formatted_sym = f"{clean_sym}.NS" if not clean_sym.endswith(".NS") else clean_sym
-                    df_data = fetch_data(formatted_sym, period="1mo", interval="1d")
+                    df_data = fetch_data(clean_sym, period="1mo", interval="1d")
                     if not df_data.empty and len(df_data) >= 30:
                         df_data.name = clean_sym
                         res = run_smc_analysis(df_data, timeframe_label="DAILY")
@@ -489,7 +487,7 @@ if page == "⚡ SMC Institutional Scanner":
                 df_sw = df_sw.sort_values(by="Master Score", ascending=False)
             st.dataframe(df_sw.reset_index(drop=True), use_container_width=True)
         else:
-            st.info("Click 'Run Swing Scan' above to scan symbols.")
+            st.info("Click 'Run Swing Scan' above to scan symbols.") 
 
     # --- TAB 3: MOMENTUM LEADERS ---
     with tab_momentum:
