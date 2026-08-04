@@ -445,7 +445,7 @@ tab_intraday, tab_swing, tab_momentum, tab_contrarian = st.tabs([
 # ==============================================================================
 # TAB 1: INTRADAY SMC SCANNER
 # ==============================================================================
-    with tab_intraday:
+  with tab_intraday:
         st.subheader("⚡ Live Intraday Scanner Results (5-Minute Timeframe)")
         st.caption("Targets updated to enforce a minimum 1:2.5 Risk-to-Reward ratio based on intraday volatility structure.")
         
@@ -528,8 +528,8 @@ tab_intraday, tab_swing, tab_momentum, tab_contrarian = st.tabs([
         else:
             st.info("Click 'Scan Momentum Leaders' above to trigger scanning.")
 # ==============================================================================
-    # TAB 4: META-CONTRARIAN ENGINE UI
-    # ==============================================================================
+# TAB 4: META-CONTRARIAN ENGINE UI
+# ==============================================================================
     with tab_contrarian:
         st.subheader("🧠 Meta-Contrarian & Crowd Exhaustion Re-Ranker")
         st.caption("Filters standard momentum signals by penalizing overcrowded, overextended, or volume-climax setups.")
