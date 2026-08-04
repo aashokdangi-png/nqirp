@@ -1,29 +1,24 @@
-name: Daily Quant & Market Scan Alerts
+name: Daily Scanner Diagnostic & Report Aggregator
 
 on:
   schedule:
-    # Runs Monday to Friday at 03:45 UTC (9:15 AM IST - Market Open)
-    - cron: '45 3 * * 1-5'
-    # Runs Monday to Friday at 10:00 UTC (3:30 PM IST - Market Close)
-    - cron: '0 10 * * 1-5'
+    - cron: '0 10 * * 1-5' # Runs automatically at 3:30 PM IST (10:00 AM UTC), Monday to Friday
   workflow_dispatch: # Allows manual trigger anytime from GitHub interface
 
 jobs:
-  run-scanner:
+  run-diagnostic:
     runs-on: ubuntu-latest
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v3
-
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.10'
-
-      - name: Install dependencies
-        run: |
-          pip install --upgrade pip
-          pip install -r requirements.txt
-
-      - name: Run Market Scanner
-        run: python app.py
+    - uses: actions/checkout@v3
+    - uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+    - run: pip install pandas yfinance scikit-learn
+    - run: python train_ml.py
+    - name: Commit Updated Report
+      run: |
+        git config --global user.name "github-actions[bot]"
+        git config --global user.email "github-actions[bot]@users.noreply.github.com"
+        git add ml_report.json
+        git commit -m "🤖 Auto-Updated AI Diagnostic Report [skip ci]" || echo "No changes"
+        git push
