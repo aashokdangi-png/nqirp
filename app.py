@@ -425,3 +425,39 @@ elif page == "👁️ Vision AI Chart Pattern Scanner":
         image = Image.open(uploaded_file)
         st.image(image, caption="Uploaded Chart Viewport", use_container_width=True)
         st.success("Visual engine active. Image loaded for pattern recognition.")
+# ==============================================================================
+# 📊 AUTOMATED AI DIAGNOSTIC & REVIEW REPORT UI
+# ==============================================================================
+st.sidebar.markdown("---")
+st.sidebar.subheader("🤖 AI Learning & Diagnostics")
+
+if st.sidebar.button("📊 Generate Review Report"):
+    st.subheader("📋 AI Scanner Diagnostic & Missed Trades Report")
+    
+    REPORT_FILE = "ml_report.json"
+    if os.path.exists(REPORT_FILE):
+        try:
+            with open(REPORT_FILE, "r") as f:
+                reports = json.load(f)
+            
+            latest_report = reports[-1]  # Get most recent report
+            
+            st.info(f"**Report Date:** {latest_report.get('Date')} | **Tracked Stocks:** {latest_report.get('Total Tracked')}")
+            
+            # 1. Display Recommendations & Fixes
+            st.markdown("### 🛠️ Machine Fixes & Recommendations")
+            for rec in latest_report.get("Recommendations", []):
+                st.success(rec)
+                
+            # 2. Display Missed Trades Table
+            st.markdown("### 🔍 Missed Opportunities & False Positives")
+            missed = latest_report.get("Missed Details", [])
+            if missed:
+                st.dataframe(pd.DataFrame(missed), use_container_width=True)
+            else:
+                st.write("🎉 Zero missed major moves logged for this session!")
+                
+        except Exception as e:
+            st.error(f"Error loading report: {e}")
+    else:
+        st.warning("No diagnostic report found yet. Reports auto-generate at market close (3:30 PM IST).")
