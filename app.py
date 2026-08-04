@@ -8,10 +8,9 @@ import os
 st.set_page_config(
     page_title="NQIRP Institutional Quant Engine",
     page_icon="⚡",
-    layout="wide"
+    layout="wide",
     initial_sidebar_state="expanded"
 )
-
 import yfinance as yf
 import os
 import pickle
