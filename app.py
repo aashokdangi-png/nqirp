@@ -747,3 +747,62 @@ elif page == "👁️ Vision AI Chart Pattern Scanner":
             st.error(f"Error loading report: {e}")
     else:
         st.warning("No diagnostic report found yet. Reports auto-generate at market close (3:30 PM IST).")
+# ==============================================================================
+# MACHINE LEARNING MODEL REVIEW & DIAGNOSTIC REPORT GENERATOR
+# ==============================================================================
+def render_ml_model_review_report():
+    st.markdown("---")
+    st.subheader("🤖 Machine Learning Model Review & Diagnostics Report")
+
+    if not os.path.exists(MODEL_PATH):
+        st.warning("⚠️ No trained `model.pkl` found. Running on heuristic dynamic fallbacks. Train a model via `train_ml.py` to enable full diagnostic reporting.")
+        return
+
+    if ml_model is None:
+        st.error("❌ Failed to load `model.pkl`. File may be corrupt.")
+        return
+
+    col1, col2 = st.columns([1, 2])
+    
+    with col1:
+        st.markdown("#### 📊 Model Metadata")
+        st.json({
+            "Model Type": type(ml_model).__name__,
+            "Status": "Active & Loaded",
+            "Features Count": getattr(ml_model, "n_features_in_", 6),
+            "Classes": list(getattr(ml_model, "classes_", [0, 1]))
+        })
+        
+        if st.button("🔄 Generate Fresh ML Performance Review", type="secondary", key="btn_gen_ml_report"):
+            st.session_state["ml_report_generated"] = True
+            st.success("ML Diagnostic Review updated successfully!")
+
+    with col2:
+        st.markdown("#### 🎯 Feature Importance & Contribution Breakdown")
+        feature_names = ["RVOL", "VWAP Dist %", "ATR %", "Day Change %", "EMA Aligned", "Range Pos"]
+        
+        if hasattr(ml_model, "feature_importances_"):
+            importances = ml_model.feature_importances_
+            feat_df = pd.DataFrame({
+                "Feature": feature_names,
+                "Importance Weight": [round(float(i), 4) for i in importances]
+            }).sort_values(by="Importance Weight", ascending=False)
+
+            st.dataframe(feat_df, use_container_width=True)
+            
+            fig = go.Figure(go.Bar(
+                x=feat_df["Importance Weight"],
+                y=feat_df["Feature"],
+                orientation="h",
+                marker_color="#00CC96"
+            ))
+            fig.update_layout(
+                title="Model Feature Importance Weights",
+                xaxis_title="Weight",
+                yaxis=dict(autorange="reversed"),
+                height=260,
+                margin=dict(l=20, r=20, t=35, b=20)
+            )
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("Feature importance metrics not available for this model estimator type.")
