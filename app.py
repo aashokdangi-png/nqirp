@@ -216,75 +216,86 @@ def run_momentum_leader_analysis(df: pd.DataFrame):
     open_p = df['Open']
     volume = df['Volume']
 
-    l_price = float(df['LTP'].iloc[-1]) if 'LTP' in df.columns else float(close.iloc[-1])
-    c = l_price
-    o_day = float(open_p.iloc[0])
-    
-    pct_change = ((c - o_day) / o_day) * 100
-
-    # 1. Volume Acceleration & RVOL
-    v20 = float(volume.tail(20).mean())
+    c = float(close.iloc[-1])
+    h = float(high.iloc[-1])
+    l = float(low.iloc[-1])
+    o = float(open_p.iloc[-1])
     v = float(volume.iloc[-1])
-    rvol = v / v20 if v20 > 0 else 1.0
-    vol_accel = volume.iloc[-1] > volume.iloc[-2] > volume.iloc[-3] if len(volume) >= 3 else False
 
-    # 2. VWAP & Moving Averages Stack
-    tp = (high + low + close) / 3
-    vwap = float((tp * volume).cumsum().iloc[-1] / volume.cumsum().iloc[-1])
-
+    # 1. Indicators
     ema9 = float(close.ewm(span=9).mean().iloc[-1])
     ema20 = float(close.ewm(span=20).mean().iloc[-1])
     ema50 = float(close.ewm(span=50).mean().iloc[-1])
 
-    # 3. ATR & Multi-Day Breakouts
     tr = pd.concat([high - low, (high - close.shift(1)).abs(), (low - close.shift(1)).abs()], axis=1).max(axis=1)
     atr = float(tr.tail(14).mean())
-
-    h20_day = float(high.tail(100).max()) if len(df) >= 100 else float(high.max())
-    is_multi_day_breakout = c >= (h20_day * 0.998)
-
-    is_bullish = (c > vwap) and (c > ema9 > ema20 > ema50) and (pct_change >= 2.5) and (rvol >= 1.8)
-    is_bearish = (c < vwap) and (c < ema9 < ema20 < ema50) and (pct_change <= -2.5) and (rvol >= 1.8)
-
-    if not (is_bullish or is_bearish):
+    if atr <= 0 or np.isnan(atr):
         return None
 
-    # 4. PREDICTIVE PROBABILITY SCORE MATRIX
-    score = 0
-    score += 25 if (c > vwap and c > ema9) else 0
-    score += 25 if (rvol >= 2.5 or vol_accel) else 15
-    score += 15 if abs(pct_change) >= 3.5 else 10
-    score += 20 if is_multi_day_breakout else 5
-    
-    is_extended = abs(c - ema9) / ema9 > 0.015
-    if not is_extended:
-        score += 15
+    # Calculate Intraday VWAP & Day Range
+    today_date = close.index[-1].date() if hasattr(close.index[-1], 'date') else None
+    if today_date:
+        today_df = df[df.index.date == today_date]
+        if not today_df.empty:
+            vwap = float((today_df['Volume'] * (today_df['High'] + today_df['Low'] + today_df['Close']) / 3).sum() / today_df['Volume'].sum())
+            open_day = float(today_df['Open'].iloc[0])
+            h_day = float(today_df['High'].max())
+            l_day = float(today_df['Low'].min())
+        else:
+            vwap = c
+            open_day = o
+            h_day, l_day = h, l
     else:
-        score -= 10
+        vwap = float((volume * (high + low + close) / 3).cumsum().iloc[-1] / volume.cumsum().iloc[-1])
+        open_day = o
+        h_day, l_day = h, l
 
-    prob_score = min(max(score, 40), 99)
+    pct_change = ((c - open_day) / open_day) * 100
+    v20 = float(volume.tail(20).mean())
+    rvol = v / v20 if v20 > 0 else 1.0
+
+    # 2. Flexible Direction Matching
+    is_bullish = c > vwap and c > ema20
+    is_bearish = c < vwap and c < ema20
+
+    if not (is_bullish or is_bearish):
+        return None  # Rejects neutral/choppy price action
+
     direction = "🔥 BULLISH INST. MOMENTUM" if is_bullish else "🩸 BEARISH INST. MOMENTUM"
+    
+    # Check Multi-Day High/Low Breakout
+    h20_day = float(high.tail(100).max()) if len(df) >= 100 else float(high.max())
+    l20_day = float(low.tail(100).min()) if len(df) >= 100 else float(low.min())
+    is_multi_day_breakout = (c >= h20_day * 0.998) if is_bullish else (c <= l20_day * 1.002)
 
+    # 3. Dynamic Score Matrix
+    prob_score = 50.0
+    prob_score += min(rvol * 12.0, 25.0)
+    prob_score += min(abs(pct_change) * 10.0, 20.0)
+    prob_score += 15.0 if is_multi_day_breakout else 0.0
+
+    # Minimum score threshold to qualify
+    if prob_score < 55.0:
+        return None
+
+    # Entry, SL, and Target Rules
+    suggested_entry = round(c, 2)
     if is_bullish:
-        suggested_entry = round(max(ema9, vwap), 2) if is_extended else round(c, 2)
-        stop_loss = round(min(ema20, suggested_entry - (1.5 * atr)), 2)
-        risk = suggested_entry - stop_loss
-        target_price = round(suggested_entry + (3.0 * risk), 2)
-        status_msg = "⚠️ Extended (Limit Entry at 9 EMA / VWAP)" if is_extended else "✅ High Probability Entry"
+        stop_loss = round(suggested_entry - (1.2 * atr), 2)
+        target_price = round(suggested_entry + (2.0 * abs(suggested_entry - stop_loss)), 2)
         exit_rule = "Trail along 9 EMA / Exit on 5-min candle close below VWAP"
+        status_msg = "🔥 Strong Intraday Surge" if rvol >= 1.2 else "⚡ Accumulation Phase"
     else:
-        suggested_entry = round(min(ema9, vwap), 2) if is_extended else round(c, 2)
-        stop_loss = round(max(ema20, suggested_entry + (1.5 * atr)), 2)
-        risk = stop_loss - suggested_entry
-        target_price = round(suggested_entry - (3.0 * risk), 2)
-        status_msg = "⚠️ Extended (Limit Entry at 9 EMA / VWAP)" if is_extended else "✅ High Probability Entry"
+        stop_loss = round(suggested_entry + (1.2 * atr), 2)
+        target_price = round(suggested_entry - (2.0 * abs(stop_loss - suggested_entry)), 2)
         exit_rule = "Trail along 9 EMA / Exit on 5-min candle close above VWAP"
+        status_msg = "💥 Heavy Selling Pressure" if rvol >= 1.2 else "🔻 Weakness Below VWAP"
 
-    rr_ratio = round(abs(target_price - suggested_entry) / risk, 2) if risk > 0 else 3.0
+    actual_risk = abs(suggested_entry - stop_loss)
+    actual_reward = abs(target_price - suggested_entry)
+    rr_ratio = round(actual_reward / actual_risk, 2) if actual_risk > 0 else 2.0
 
-# Calculate ML Feature Inputs
-    h_day = float(high.tail(75).max()) if len(df) >= 75 else float(high.max())
-    l_day = float(low.tail(75).min()) if len(df) >= 75 else float(low.min())
+    # 4. ML Inference
     vwap_dist_pct = abs(c - vwap) / vwap * 100
     atr_pct = (atr / c) * 100
     ema_aligned = (c > ema9 > ema20 > ema50) if is_bullish else (c < ema9 < ema20 < ema50)
@@ -296,7 +307,7 @@ def run_momentum_leader_analysis(df: pd.DataFrame):
     return {
         "Symbol": df.name if hasattr(df, 'name') else "STOCK",
         "Direction": direction,
-        "Predictive Score": prob_score,
+        "Predictive Score": round(prob_score, 1),
         "AI Win Prob": ml_out["AI Win Prob"],
         "Trap Risk": ml_out["Trap Risk"],
         "Day Change %": f"{pct_change:+.2f}%",
