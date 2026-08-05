@@ -1,219 +1,3 @@
-import streamlit as st
-import pandas as pd
-import numpy as np
-import plotly.graph_objects as go
-from PIL import Image
-import os
-import yfinance as yf
-import pickle
-import json
-
-st.set_page_config(
-    page_title="NQIRP Institutional Quant Engine",
-    page_icon="⚡",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
-
-# ==============================================================================
-# DATA FETCHING & CACHING (FIX #2: Added cache to fetch_data to stop rate limits)
-# ==============================================================================
-@st.cache_data(ttl=3600, show_spinner="Fetching stock universe...")
-def fetch_universe_data(tickers: list) -> dict:
-    formatted_tickers = [t if t.endswith(('.NS', '.BO')) else f"{t}.NS" for t in tickers]
-    data = yf.download(formatted_tickers, period="1y", interval="1d", group_by="ticker", threads=True, progress=False)
-    stock_dict = {}
-    for sym in formatted_tickers:
-        try:
-            df = data[sym].dropna(subset=['Close']) if len(formatted_tickers) > 1 else data.dropna(subset=['Close'])
-            if len(df) >= 50:
-                stock_dict[sym] = df
-        except Exception:
-            continue
-    return stock_dict
-
-@st.cache_data(ttl=300, show_spinner=False)
-def fetch_data(symbol: str, period: str = "1d", interval: str = "5m") -> pd.DataFrame:
-    """ Cached single ticker data fetcher to prevent yfinance rate limits and tab delay. """
-    ticker_sym = f"{symbol}.NS" if not symbol.endswith(('.NS', '.BO')) else symbol
-    df = yf.download(ticker_sym, period=period, interval=interval, progress=False)
-    if isinstance(df.columns, pd.MultiIndex):
-        df.columns = df.columns.get_level_values(0)
-    return df
-
-# ==============================================================================
-# MACHINE LEARNING INFERENCE ENGINE
-# ==============================================================================
-MODEL_PATH = "model.pkl"
-ml_model = pickle.load(open(MODEL_PATH, "rb")) if os.path.exists(MODEL_PATH) else None
-
-def predict_trade_probability(rvol: float, vwap_dist_pct: float, atr_pct: float, day_change_pct: float, ema_aligned: bool, range_pos: float) -> dict:
-    """ Machine Learning Inference Engine with dynamic heuristic fallbacks. """
-    features = [[rvol, vwap_dist_pct, atr_pct, abs(day_change_pct), 1.0 if ema_aligned else 0.0, range_pos]]
-    
-    if ml_model is not None:
-        try:
-            prob = float(ml_model.predict_proba(features)[0][1]) * 100
-        except Exception:
-            prob = None
-    else:
-        prob = None
-
-    if prob is None:
-        base_prob = 50.0
-        base_prob += min(rvol * 8.0, 24.0)
-        base_prob += 12.0 if ema_aligned else -8.0
-        base_prob -= max((vwap_dist_pct - 1.5) * 6.0, 0)
-        base_prob += 10.0 if (0.2 <= range_pos <= 0.85) else -5.0
-        prob = min(max(base_prob, 35.0), 96.0)
-
-    if vwap_dist_pct > 2.0 or (rvol < 1.0 and abs(day_change_pct) > 3.0):
-        trap_risk = "⚠️ HIGH (Exhaustion/Trap)"
-    elif prob >= 75.0:
-        trap_risk = "🟢 LOW (High Conviction)"
-    else:
-        trap_risk = "🟡 MEDIUM"
-
-    return {
-        "AI Win Prob": f"{round(prob, 1)}%",
-        "Trap Risk": trap_risk
-    }
-
-# ==============================================================================
-# QUANTITATIVE SMC ENGINE (INTRADAY vs DAILY)
-# ==============================================================================
-def run_smc_analysis(df: pd.DataFrame, timeframe_label="INTRADAY") -> dict:
-    if df.empty or len(df) < 30:
-        return None
-
-    close = df['Close'].dropna()
-    high = df['High'].dropna()
-    low = df['Low'].dropna()
-    open_p = df['Open'].dropna()
-    volume = df['Volume'].dropna()
-
-    if len(close) < 20:
-        return None
-
-    c_live = float(close.iloc[-1])
-    c_closed = float(close.iloc[-2])
-    v_closed = float(volume.iloc[-2])
-    o_live = float(open_p.iloc[-1])
-
-    # Volatility & Closed Bar Indicators
-    tr = pd.concat([high - low, (high - close.shift(1)).abs(), (low - close.shift(1)).abs()], axis=1).max(axis=1)
-    atr = float(tr.tail(14).iloc[:-1].mean())
-    if atr <= 0 or np.isnan(atr):
-        return None
-
-    delta = close.diff()
-    gain = (delta.where(delta > 0, 0)).rolling(14).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
-    rs = gain / loss.replace(0, 1e-9)
-    rsi_series = 100 - (100 / (1 + rs))
-    rsi = float(rsi_series.dropna().iloc[-2]) if len(rsi_series.dropna()) >= 2 else 50.0
-
-    v20 = float(volume.tail(20).mean())
-    rvol = v_closed / v20 if v20 > 0 else 1.0
-    ema20 = float(close.ewm(span=20).mean().iloc[-2])
-    ema50 = float(close.ewm(span=50).mean().iloc[-2])
-    vwap = float((volume * (high + low + close) / 3).cumsum().iloc[-2] / volume.cumsum().iloc[-2]) if volume.sum() > 0 else c_closed
-
-    smc_confluences, scores = [], []
-    direction = "NEUTRAL"
-    trigger_price = c_closed
-
-    # VWAP Crosses
-    if c_live < vwap and close.iloc[-2] >= vwap and (o_live - c_live) > (atr * 0.3):
-        smc_confluences.append("Early VWAP Breakdown Cross")
-        scores.append(90)
-        direction = "BEARISH"
-        trigger_price = round(vwap, 2)
-    elif c_live > vwap and close.iloc[-2] <= vwap and (c_live - o_live) > (atr * 0.3):
-        smc_confluences.append("Early VWAP Bullish Cross")
-        scores.append(90)
-        direction = "BULLISH"
-        trigger_price = round(vwap, 2)
-
-    # Micro-BOS Sweeps
-    l3_prev = float(low.tail(4).iloc[:-1].min())
-    h3_prev = float(high.tail(4).iloc[:-1].max())
-    if c_live < l3_prev and direction == "NEUTRAL":
-        smc_confluences.append("Micro-BOS Wick Breakdown")
-        scores.append(85)
-        direction = "BEARISH"
-        trigger_price = round(l3_prev, 2)
-    elif c_live > h3_prev and direction == "NEUTRAL":
-        smc_confluences.append("Micro-BOS Wick Breakout")
-        scores.append(85)
-        direction = "BULLISH"
-        trigger_price = round(h3_prev, 2)
-
-    # Structural BOS
-    h20_prev = float(high.tail(25).iloc[:-5].max())
-    l20_prev = float(low.tail(25).iloc[:-5].min())
-    if c_live < l20_prev and direction == "NEUTRAL":
-        smc_confluences.append("Bearish Structural BOS")
-        scores.append(92)
-        direction = "BEARISH"
-        trigger_price = round(l20_prev, 2)
-    elif c_live > h20_prev and direction == "NEUTRAL":
-        smc_confluences.append("Bullish Structural BOS")
-        scores.append(92)
-        direction = "BULLISH"
-        trigger_price = round(h20_prev, 2)
-
-    if not scores or direction == "NEUTRAL":
-        return None
-
-    # Overbought/Oversold Safety Shield
-    if (direction == "BEARISH" and rsi < 25) or (direction == "BULLISH" and rsi > 75):
-        return None
-
-    master_score = max(scores) + min(len(smc_confluences) * 4.0, 20.0)
-
-    suggested_entry = trigger_price
-    if direction == "BULLISH":
-        dist_from_trigger_pct = ((c_live - suggested_entry) / suggested_entry) * 100
-        stop_loss = round(suggested_entry - (1.2 * atr), 2)
-        target_price = round(suggested_entry + (2.5 * abs(suggested_entry - stop_loss)), 2)
-    else:
-        dist_from_trigger_pct = ((suggested_entry - c_live) / suggested_entry) * 100
-        stop_loss = round(suggested_entry + (1.2 * atr), 2)
-        target_price = round(suggested_entry - (2.5 * abs(stop_loss - suggested_entry)), 2)
-
-    if dist_from_trigger_pct > 1.2:
-        return None
-
-    actual_risk = abs(suggested_entry - stop_loss)
-    actual_reward = abs(target_price - suggested_entry)
-    rr_ratio = round(actual_reward / actual_risk, 2) if actual_risk > 0 else 2.5
-
-    vwap_dist_pct = abs(c_live - vwap) / vwap * 100
-    atr_pct = (atr / c_live) * 100
-    pct_change = ((c_live - o_live) / o_live) * 100
-    ema_aligned = (c_live > ema20 > ema50) if direction == "BULLISH" else (c_live < ema20 < ema50)
-    day_range = (float(high.iloc[-1]) - float(low.iloc[-1])) if (float(high.iloc[-1]) - float(low.iloc[-1])) > 0 else 1.0
-    range_pos = (c_live - float(low.iloc[-1])) / day_range
-
-    ml_out = predict_trade_probability(rvol, vwap_dist_pct, atr_pct, pct_change, ema_aligned, range_pos)
-
-    return {
-        "Symbol": getattr(df, 'name', "STOCK"),
-        "Direction": direction,
-        "Master Score": round(master_score, 1),
-        "AI Win Prob": ml_out["AI Win Prob"],
-        "Trap Risk": ml_out["Trap Risk"],
-        "Trade Action": "✅ SWING ENTRY" if timeframe_label == "DAILY" else "✅ ACTIVE ENTRY",
-        "Suggested Entry": suggested_entry,
-        "Current Price": round(c_live, 2),
-        "Target Price": target_price,
-        "Stop Loss": stop_loss,
-        "R/R Ratio": f"1 : {rr_ratio}",
-        "RVOL": round(rvol, 2),
-        "SMC Signals": ", ".join(smc_confluences)
-    }
-
 # ==============================================================================
 # INSTITUTIONAL MOMENTUM SCANNER ENGINE
 # ==============================================================================
@@ -232,6 +16,7 @@ def run_momentum_leader_analysis(df: pd.DataFrame):
     v_closed = float(volume.iloc[-2])
 
     ema20 = float(close.ewm(span=20).mean().iloc[-2])
+
     tr = pd.concat([high - low, (high - close.shift(1)).abs(), (low - close.shift(1)).abs()], axis=1).max(axis=1)
     atr = float(tr.tail(14).mean())
     if atr <= 0 or np.isnan(atr):
@@ -241,8 +26,10 @@ def run_momentum_leader_analysis(df: pd.DataFrame):
     if today_date:
         today_df = df[df.index.date == today_date]
         vwap_anchor = float((today_df['Volume'] * (today_df['High'] + today_df['Low'] + today_df['Close']) / 3).sum() / today_df['Volume'].sum()) if not today_df.empty else c_closed
+        today_open = float(today_df['Open'].iloc[0]) if not today_df.empty else float(open_p.iloc[0])
     else:
         vwap_anchor = float((volume * (high + low + close) / 3).cumsum().iloc[-2] / volume.cumsum().iloc[-2])
+        today_open = float(open_p.iloc[0])
 
     v20 = float(volume.tail(20).mean())
     rvol = v_closed / v20 if v20 > 0 else 1.0
@@ -269,17 +56,18 @@ def run_momentum_leader_analysis(df: pd.DataFrame):
         stop_loss = round(suggested_entry + (1.0 * atr), 2)
         target_price = round(suggested_entry - (2.5 * atr), 2)
 
-    day_change_pct = round(((c_live - open_p.iloc[0]) / open_p.iloc[0]) * 100, 2)
+    day_change_pct = round(((c_live - today_open) / today_open) * 100, 2)
     predictive_score = 50.0 + min(rvol * 12.0, 25.0) + min(abs(day_change_pct) * 10.0, 25.0)
 
     if dist_from_trigger_pct < 0.1:
         trade_status = "🎯 AT BREAKOUT TRIGGER"
-    elif 0.1 <= dist_from_trigger_pct <= 0.8:
+    elif 0.1 <= dist_from_trigger_pct <= 1.2:
         trade_status = f"🚀 ACTIVE (+{round(dist_from_trigger_pct, 2)}% from trigger)"
     else:
         trade_status = f"⚠️ OVEREXTENDED (+{round(dist_from_trigger_pct, 2)}% moved)"
 
-    if dist_from_trigger_pct > 1.2:
+    # Cap display threshold to 4.0% rather than 1.2% so momentum leaders aren't deleted
+    if dist_from_trigger_pct > 4.0:
         return None
 
     actual_risk = abs(suggested_entry - stop_loss)
@@ -691,7 +479,7 @@ if page == "⚡ SMC Institutional Scanner":
             with st.spinner("Scanning momentum leaders..."):
                 momentum_results = []
                 for symbol in symbols_to_scan:
-                    df_data = fetch_data(symbol, period="1d", interval="5m")
+                    df_data = fetch_data(symbol, period="5d", interval="5m")
                     if not df_data.empty and len(df_data) >= 35:
                         df_data.name = symbol
                         res = run_momentum_leader_analysis(df_data)
@@ -714,7 +502,7 @@ if page == "⚡ SMC Institutional Scanner":
             with st.spinner("Analyzing crowd exhaustion and overextension..."):
                 contrarian_results = []
                 for symbol in symbols_to_scan:
-                    df_data = fetch_data(symbol, period="1d", interval="5m")
+                    df_data = fetch_data(symbol, period="5d", interval="5m")
                     if not df_data.empty and len(df_data) >= 35:
                         df_data.name = symbol
                         res = run_meta_contrarian_analysis(df_data)
