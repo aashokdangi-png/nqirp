@@ -687,31 +687,31 @@ elif page == "👁️ Vision AI Chart Pattern Scanner":
         st.success("Analysis Complete: Double Bottom / Liquidity Sweep Detected at Support Level.")
 
     st.markdown("---")
-    st.subheader("📊 Automated Daily Diagnostic Reports")
-    
-    REPORT_FILE = "market_close_report.json"
+   st.subheader("📊 Automated Daily Diagnostic Reports")
 
-    if os.path.exists(REPORT_FILE):
-        try:
-            with open(REPORT_FILE, "r") as f:
-                reports = json.load(f)
-            latest_report = reports[-1]
-            st.info(f"**Report Date:** {latest_report.get('Date')} | **Tracked Stocks:** {latest_report.get('Total Tracked')}")
+# Button to trigger report generation anytime
+if st.button("🔄 Generate Today's Diagnostic Report", type="primary"):
+    with st.spinner("Running end-of-day market diagnostics across watchlist..."):
+        # Run master scan across watchlist symbols
+        report_data = run_unified_master_scan(symbols_to_scan)
+        
+        if not report_data.empty:
+            # Save report locally for the session
+            report_dict = report_data.to_dict(orient="records")
+            with open("market_close_report.json", "w") as f:
+                json.dump(report_dict, f, indent=4)
+            st.success("✅ Diagnostic report generated successfully!")
+        else:
+            st.warning("No confluence setups detected for today's data.")
 
-            st.markdown("### 🛠️ Machine Fixes & Recommendations")
-            for rec in latest_report.get("Recommendations", []):
-                st.success(rec)
-
-            st.markdown("### 🔍 Missed Opportunities & False Positives")
-            missed = latest_report.get("Missed Details", [])
-            if missed:
-                st.dataframe(pd.DataFrame(missed), use_container_width=True)
-            else:
-                st.write("Zero missed major moves logged for this session!")
-        except Exception as e:
-            st.error(f"Error loading report: {e}")
-    else:
-        st.warning("No diagnostic report found yet. Reports auto-generate at market close (3:30 PM IST).")
+# Display the report if it exists
+REPORT_FILE = "market_close_report.json"
+if os.path.exists(REPORT_FILE):
+    with open(REPORT_FILE, "r") as f:
+        data = json.load(f)
+    st.dataframe(pd.DataFrame(data), use_container_width=True)
+else:
+    st.info("No report generated yet today. Click the button above to run diagnostics.")
 # ==============================================================================
 # MACHINE LEARNING MODEL REVIEW & DIAGNOSTIC REPORT GENERATOR
 # ==============================================================================
