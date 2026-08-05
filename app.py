@@ -424,7 +424,7 @@ def run_unified_master_scan(symbols: list) -> pd.DataFrame:
     master_rows = []
     
     for symbol in symbols:
-        df_data = fetch_data(symbol, period="1d", interval="5m")
+        df_data = fetch_data(symbol, period="5d", interval="5m")
         if df_data.empty or len(df_data) < 35:
             continue
             
@@ -645,7 +645,7 @@ if page == "⚡ SMC Institutional Scanner":
             with st.spinner("Scanning intraday SMC confluences..."):
                 intraday_results = []
                 for symbol in symbols_to_scan:
-                    df_data = fetch_data(symbol, period="1d", interval="5m")
+                    df_data = fetch_data(symbol, period="5d", interval="5m")
                     if not df_data.empty and len(df_data) >= 30:
                         df_data.name = symbol
                         res = run_smc_analysis(df_data, timeframe_label="INTRADAY")
