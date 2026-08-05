@@ -312,15 +312,21 @@ def run_unified_master_scan(symbols: list) -> pd.DataFrame:
             mc_advice = mc["Actionable Advice"] if mc else "NO_FLAGS"
             mc_status = mc["Crowd Status"] if mc else "CLEAR"
 
-            # Determine Trade Grade Matrix
-            if smc and mom and "HIGH CONVICTION" in mc_advice:
-                grade = "🔥 A+ CONFLUENCE"
+            # Improved Grade Hierarchy: Preserves top ranking for strong moves
+            if smc and mom:
+                if mc and "HIGH CONVICTION" in mc_advice:
+                    grade = "🔥 A+ CONFLUENCE"
+                elif mc and "SKIP" in mc_advice:
+                    grade = "🚀 HIGH MOMENTUM (EXTENDED)"
+                else:
+                    grade = "🚀 HIGH MOMENTUM SMC"
+            elif smc or mom:
+                if mc and "SKIP" in mc_advice:
+                    grade = "⚡ SINGLE ENGINE (EXTENDED)"
+                else:
+                    grade = "⚡ SINGLE ENGINE"
             elif mc and "SKIP" in mc_advice:
                 grade = "⚠️ CROWD TRAP"
-            elif smc and mom:
-                grade = "🚀 HIGH MOMENTUM SMC"
-            elif smc or mom:
-                grade = "⚡ SINGLE ENGINE"
             else:
                 grade = "👀 WATCHLIST"
 
@@ -339,8 +345,16 @@ def run_unified_master_scan(symbols: list) -> pd.DataFrame:
 
     df_res = pd.DataFrame(master_rows)
     if not df_res.empty and "Grade" in df_res.columns:
-        # Custom sorting to prioritize A+ Confluences at the top
-        grade_order = {"🔥 A+ CONFLUENCE": 0, "🚀 HIGH MOMENTUM SMC": 1, "⚡ SINGLE ENGINE": 2, "👀 WATCHLIST": 3, "⚠️ CROWD TRAP": 4}
+        # Prioritizes momentum breakouts at the top even if fast moves trigger extended warnings
+        grade_order = {
+            "🔥 A+ CONFLUENCE": 0,
+            "🚀 HIGH MOMENTUM SMC": 1,
+            "🚀 HIGH MOMENTUM (EXTENDED)": 2,
+            "⚡ SINGLE ENGINE": 3,
+            "⚡ SINGLE ENGINE (EXTENDED)": 4,
+            "👀 WATCHLIST": 5,
+            "⚠️ CROWD TRAP": 6
+        }
         df_res["sort_key"] = df_res["Grade"].map(grade_order)
         df_res = df_res.sort_values(by="sort_key").drop(columns=["sort_key"])
 
