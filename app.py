@@ -295,9 +295,12 @@ def run_meta_contrarian_analysis(df: pd.DataFrame) -> dict:
 # ==============================================================================
 def run_unified_master_scan(symbols: list) -> pd.DataFrame:
     """
-    Executes SMC, Momentum, and Meta-Contrarian scans in a single pass to surface high-probability confluence trades instantly.
+    STRICT TRIPLE ENGINE AGREEMENT ENGINE
+    Filters watchlist strictly for 'GEMS' where SMC, Momentum Leaders, 
+    and Meta-Contrarian engines ALL trigger and agree on direction.
     """
     master_rows = []
+    
     for symbol in symbols:
         df_data = fetch_data(symbol, period="5d", interval="5m")
         if df_data.empty or len(df_data) < 35:
@@ -309,57 +312,48 @@ def run_unified_master_scan(symbols: list) -> pd.DataFrame:
         mom = run_momentum_leader_analysis(df_data)
         mc  = run_meta_contrarian_analysis(df_data)
 
-        # Filter for stocks generating at least one active signal
-        if smc or mom or mc:
-            mc_advice = mc["Actionable Advice"] if mc else "NO_FLAGS"
-            mc_status = mc["Crowd Status"] if mc else "CLEAR"
+        # RULE 1: TRIPLE ENGINE MANDATE (All 3 models must trigger)
+        if not (smc and mom and mc):
+            continue
 
-            # Improved Grade Hierarchy: Preserves top ranking for strong moves
-            if smc and mom:
-                if mc and "HIGH CONVICTION" in mc_advice:
-                    grade = "🔥 A+ CONFLUENCE"
-                elif mc and "SKIP" in mc_advice:
-                    grade = "🚀 HIGH MOMENTUM (EXTENDED)"
-                else:
-                    grade = "🚀 HIGH MOMENTUM SMC"
-            elif smc or mom:
-                if mc and "SKIP" in mc_advice:
-                    grade = "⚡ SINGLE ENGINE (EXTENDED)"
-                else:
-                    grade = "⚡ SINGLE ENGINE"
-            elif mc and "SKIP" in mc_advice:
-                grade = "⚠️ CROWD TRAP"
-            else:
-                grade = "👀 WATCHLIST"
+        # RULE 2: ZERO TRAP TOLERANCE (Exclude crowded/extended signals)
+        if "SKIP" in mc.get("Actionable Advice", "") or "TRAP" in mc.get("Crowd Status", ""):
+            continue
 
-            master_rows.append({
-                "Symbol": symbol,
-                "Grade": grade,
-                "Direction": smc["Direction"] if smc else (mom["Direction"] if mom else mc["Direction"]),
-                "SMC Entry": smc["Suggested Entry"] if smc else "N/A",
-                "Stop Loss": smc["Stop Loss"] if smc else (mom["Stop Loss"] if mom else "N/A"),
-                "Target Price": smc["Target Price"] if smc else (mom["Target Price"] if mom else "N/A"),
-                "Breakout Dist": mom["Breakout Distance"] if mom else "N/A",
-                "Contrarian Status": mc_status,
-                "AI Win Prob": smc["AI Win Prob"] if smc else (mom["AI Win Prob"] if mom else "N/A"),
-                "Action": mc_advice if mc and "SKIP" in mc_advice else (smc["Trade Action"] if smc else "MONITOR")
-            })
+        # RULE 3: STRICT DIRECTIONAL ALIGNMENT
+        smc_dir = smc["Direction"].upper()
+        mom_dir = "BULLISH" if "BULLISH" in mom["Direction"].upper() else "BEARISH"
+        mc_dir  = mc["Direction"].upper()
+
+        if not (smc_dir == mom_dir == mc_dir):
+            continue  # Rejects split-direction signals
+
+        # Determine Gem Quality Grade
+        mc_advice = mc.get("Actionable Advice", "")
+        if "HIGH CONVICTION" in mc_advice:
+            grade = "💎 TRIPLE ENGINE A+ GEM"
+        else:
+            grade = "💎 TRIPLE ENGINE GEM"
+
+        master_rows.append({
+            "Symbol": symbol,
+            "Grade": grade,
+            "Direction": smc_dir,
+            "SMC Entry": smc["Suggested Entry"],
+            "Stop Loss": smc["Stop Loss"],
+            "Target Price": smc["Target Price"],
+            "Breakout Dist": mom["Breakout Distance"],
+            "Contrarian Status": mc["Crowd Status"],
+            "AI Win Prob": smc["AI Win Prob"],
+            "Action": "🔥 HIGH CONVICTION ENTRY" if "A+" in grade else "✅ ACTIVE CONFLUENCE ENTRY"
+        })
 
     df_res = pd.DataFrame(master_rows)
     if not df_res.empty and "Grade" in df_res.columns:
-        # Prioritizes momentum breakouts at the top even if fast moves trigger extended warnings
-        grade_order = {
-            "🔥 A+ CONFLUENCE": 0,
-            "🚀 HIGH MOMENTUM SMC": 1,
-            "🚀 HIGH MOMENTUM (EXTENDED)": 2,
-            "⚡ SINGLE ENGINE": 3,
-            "⚡ SINGLE ENGINE (EXTENDED)": 4,
-            "👀 WATCHLIST": 5,
-            "⚠️ CROWD TRAP": 6
-        }
+        grade_order = {"💎 TRIPLE ENGINE A+ GEM": 0, "💎 TRIPLE ENGINE GEM": 1}
         df_res["sort_key"] = df_res["Grade"].map(grade_order)
         df_res = df_res.sort_values(by="sort_key").drop(columns=["sort_key"])
-
+    
     return df_res
 # ==============================================================================
 # QUANTITATIVE BACKTESTING ENGINE (FIX #1: SMC Logic, FIX #3: Limits, FIX #4: Open Trades)
