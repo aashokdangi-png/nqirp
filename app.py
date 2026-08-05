@@ -327,11 +327,13 @@ def run_unified_master_scan(symbols: list) -> pd.DataFrame:
             else:
                 grade = "👀 WATCHLIST"
                 
-            master_rows.append({
+           master_rows.append({
                 "Symbol": symbol,
                 "Grade": grade,
                 "Direction": smc["Direction"] if smc else (mom["Direction"] if mom else mc["Direction"]),
                 "SMC Entry": smc["Suggested Entry"] if smc else "N/A",
+                "Stop Loss": smc["Stop Loss"] if smc else (mom["Stop Loss"] if mom else "N/A"),
+                "Target Price": smc["Target Price"] if smc else (mom["Target Price"] if mom else "N/A"),
                 "Breakout Dist": mom["Breakout Distance"] if mom else "N/A",
                 "Contrarian Status": mc_status,
                 "AI Win Prob": smc["AI Win Prob"] if smc else (mom["AI Win Prob"] if mom else "N/A"),
