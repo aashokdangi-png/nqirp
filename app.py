@@ -322,6 +322,7 @@ def run_meta_contrarian_analysis(df: pd.DataFrame) -> dict:
     v_closed = float(volume.iloc[-2])
 
     ema20 = float(close.ewm(span=20).mean().iloc[-2])
+
     tr = pd.concat([high - low, (high - close.shift(1)).abs(), (low - close.shift(1)).abs()], axis=1).max(axis=1)
     atr = float(tr.tail(14).iloc[:-1].mean())
     if atr <= 0 or np.isnan(atr):
@@ -370,7 +371,7 @@ def run_meta_contrarian_analysis(df: pd.DataFrame) -> dict:
         contrarian_modifier += 4.0
         crowd_flags.append("🟢 Healthy Institutional Volume")
 
- if is_bullish and rsi > 72:
+    if is_bullish and rsi > 72:
         contrarian_modifier -= 5.0
         crowd_flags.append("⚠️ RSI Overbought (>72)")
     elif is_bearish and rsi < 28:
