@@ -679,39 +679,28 @@ elif page == "🧪 Backtesting Engine":
 # ------------------------------------------------------------------------------
 elif page == "👁️ Vision AI Chart Pattern Scanner":
     st.title("👁️ Vision AI Chart Pattern & Diagnostic System")
+    
+    st.subheader("📊 Automated Daily Diagnostic Reports")
 
-    uploaded_file = st.file_uploader("Upload Chart Screenshot for AI Analysis", type=["png", "jpg", "jpeg"])
-    if uploaded_file is not None:
-        image = Image.open(uploaded_file)
-        st.image(image, caption="Uploaded Chart", use_column_width=True)
-        st.success("Analysis Complete: Double Bottom / Liquidity Sweep Detected at Support Level.")
+    if st.button("🔄 Generate Today's Diagnostic Report", type="primary"):
+        with st.spinner("Running end-of-day market diagnostics across watchlist..."):
+            report_data = run_unified_master_scan(symbols_to_scan)
+            
+            if not report_data.empty:
+                report_dict = report_data.to_dict(orient="records")
+                with open("market_close_report.json", "w") as f:
+                    json.dump(report_dict, f, indent=4)
+                st.success("✅ Diagnostic report generated successfully!")
+            else:
+                st.warning("No confluence setups detected for today's data.")
 
-    st.markdown("---")
-   st.subheader("📊 Automated Daily Diagnostic Reports")
-
-# Button to trigger report generation anytime
-if st.button("🔄 Generate Today's Diagnostic Report", type="primary"):
-    with st.spinner("Running end-of-day market diagnostics across watchlist..."):
-        # Run master scan across watchlist symbols
-        report_data = run_unified_master_scan(symbols_to_scan)
-        
-        if not report_data.empty:
-            # Save report locally for the session
-            report_dict = report_data.to_dict(orient="records")
-            with open("market_close_report.json", "w") as f:
-                json.dump(report_dict, f, indent=4)
-            st.success("✅ Diagnostic report generated successfully!")
-        else:
-            st.warning("No confluence setups detected for today's data.")
-
-# Display the report if it exists
-REPORT_FILE = "market_close_report.json"
-if os.path.exists(REPORT_FILE):
-    with open(REPORT_FILE, "r") as f:
-        data = json.load(f)
-    st.dataframe(pd.DataFrame(data), use_container_width=True)
-else:
-    st.info("No report generated yet today. Click the button above to run diagnostics.")
+    REPORT_FILE = "market_close_report.json"
+    if os.path.exists(REPORT_FILE):
+        with open(REPORT_FILE, "r") as f:
+            data = json.load(f)
+        st.dataframe(pd.DataFrame(data), use_container_width=True)
+    else:
+        st.info("No report generated yet today. Click the button above to run diagnostics.")
 # ==============================================================================
 # MACHINE LEARNING MODEL REVIEW & DIAGNOSTIC REPORT GENERATOR
 # ==============================================================================
