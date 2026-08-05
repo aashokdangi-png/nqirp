@@ -1,8 +1,6 @@
 streamlit
-yfinance
 pandas
 numpy
-plotly
-Pillow
-requests
-google-genai
+yfinance
+scikit-learn
+joblib
