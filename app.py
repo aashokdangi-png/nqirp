@@ -620,23 +620,25 @@ if page == "⚡ SMC Institutional Scanner":
     st.title("⚡ SMC Institutional Scanner Engine")
     st.markdown(f"Real-time multi-timeframe quantitative scanning across **{len(symbols_to_scan)} stocks** for SMC confluences, FVG, BOS, and Momentum Leaders.")
 
-  tab_master, tab_intraday, tab_swing, tab_momentum, tab_contrarian = st.tabs([
-    "🌟 Master Confluence", "⚡ Intraday SMC", "📈 Swing Signals", "🚀 Momentum Leaders", "🧠 Meta-Contrarian Engine"
-])
-with tab_master:
-    st.subheader("🌟 Unified Master Confluence Dashboard")
-    st.caption("Single-click live scan across SMC, Momentum, and Meta-Contrarian engines to isolate A+ confluence trades.")
-    
-    if st.button("🌟 Run Unified Master Scan", type="primary", key="btn_master_scan"):
-        with st.spinner(f"Running multi-engine confluence audit across {len(symbols_to_scan)} stocks..."):
-            master_df = run_unified_master_scan(symbols_to_scan)
-            st.session_state['master_results'] = master_df
+    tab_master, tab_intraday, tab_swing, tab_momentum, tab_contrarian = st.tabs([
+        "🌟 Master Confluence", "⚡ Intraday SMC", "📈 Swing Signals", "🚀 Momentum Leaders", "🧠 Meta-Contrarian Engine"
+    ])
 
-    res_master = st.session_state.get('master_results', pd.DataFrame())
-    if not res_master.empty:
-        st.dataframe(res_master.reset_index(drop=True), use_container_width=True)
-    else:
-        st.info("Click 'Run Unified Master Scan' above during market hours to evaluate all confluences in a single table.")
+    with tab_master:
+        st.subheader("🌟 Unified Master Confluence Dashboard")
+        st.caption("Single-click live scan across SMC, Momentum, and Meta-Contrarian engines to isolate A+ confluence trades.")
+        
+        if st.button("🌟 Run Unified Master Scan", type="primary", key="btn_master_scan"):
+            with st.spinner(f"Running multi-engine confluence audit across {len(symbols_to_scan)} stocks..."):
+                master_df = run_unified_master_scan(symbols_to_scan)
+                st.session_state['master_results'] = master_df
+
+        res_master = st.session_state.get('master_results', pd.DataFrame())
+        if not res_master.empty:
+            st.dataframe(res_master.reset_index(drop=True), use_container_width=True)
+        else:
+            st.info("Click 'Run Unified Master Scan' above during market hours to evaluate all confluences in a single table.")
+
     with tab_intraday:
         st.subheader("⚡ Intraday SMC Scanner Engine")
         if st.button("⚡ Run Intraday SMC Scan", type="primary", key="btn_intraday_scan"):
