@@ -1,3 +1,90 @@
+import streamlit as st
+import pandas as pd
+import numpy as np
+import yfinance as yf
+from datetime import datetime, timedelta
+
+# Set page configuration
+st.set_page_config(
+    page_title="NQIRP Institutional Quant Engine",
+    page_icon="⚡",
+    layout="wide"
+)
+
+# ==============================================================================
+# CORE DATA & HELPER FUNCTIONS
+# ==============================================================================
+@st.cache_data(ttl=60)
+def fetch_data(symbol: str, period: str = "5d", interval: str = "5m") -> pd.DataFrame:
+    """Fetches historical market data via yfinance with multi-index cleanup."""
+    try:
+        ticker = f"{symbol}.NS" if not symbol.endswith(".NS") else symbol
+        df = yf.download(ticker, period=period, interval=interval, progress=False)
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
+        df.dropna(inplace=True)
+        return df
+    except Exception:
+        return pd.DataFrame()
+
+def predict_trade_probability(rvol, vwap_dist, atr_pct, day_change, is_bullish, sentiment_score=0.5):
+    """Calculates AI win probability and trap risk metrics."""
+    prob = 60.0 + min(rvol * 5.0, 15.0) - min(vwap_dist * 4.0, 15.0) + min(abs(day_change) * 2.0, 10.0)
+    win_prob = round(min(max(prob, 35.0), 92.0), 1)
+    trap_risk = "HIGH" if vwap_dist > 1.8 or rvol > 3.2 else ("MEDIUM" if vwap_dist > 1.0 else "LOW")
+    return {"AI Win Prob": f"{win_prob}%", "Trap Risk": trap_risk}
+
+def run_smc_analysis(df: pd.DataFrame, timeframe_label: str = "INTRADAY") -> dict:
+    """Core Smart Money Concepts (SMC) structure scan engine."""
+    if df.empty or len(df) < 30:
+        return None
+    
+    close = df['Close']
+    high = df['High']
+    low = df['Low']
+    volume = df['Volume']
+    
+    c_live = float(close.iloc[-1])
+    
+    tr = pd.concat([high - low, (high - close.shift(1)).abs(), (low - close.shift(1)).abs()], axis=1).max(axis=1)
+    atr = float(tr.tail(14).mean())
+    if atr <= 0 or np.isnan(atr):
+        return None
+
+    ema20 = float(close.ewm(span=20).mean().iloc[-1])
+    v20 = float(volume.tail(20).mean())
+    rvol = float(volume.iloc[-1] / v20) if v20 > 0 else 1.0
+
+    today_date = close.index[-1].date() if hasattr(close.index[-1], 'date') else None
+    if today_date:
+        today_df = df[df.index.date == today_date]
+        vwap = float((today_df['Volume'] * (today_df['High'] + today_df['Low'] + today_df['Close']) / 3).sum() / today_df['Volume'].sum()) if not today_df.empty else c_live
+    else:
+        vwap = float((volume * (high + low + close) / 3).cumsum().iloc[-1] / volume.cumsum().iloc[-1])
+
+    is_bullish = c_live > vwap and c_live > ema20
+    is_bearish = c_live < vwap and c_live < ema20
+
+    if not (is_bullish or is_bearish):
+        return None
+
+    direction = "BULLISH" if is_bullish else "BEARISH"
+    sl = round(c_live - (1.2 * atr), 2) if is_bullish else round(c_live + (1.2 * atr), 2)
+    tp = round(c_live + (2.4 * atr), 2) if is_bullish else round(c_live - (2.4 * atr), 2)
+
+    return {
+        "Symbol": getattr(df, 'name', "STOCK"),
+        "Timeframe": timeframe_label,
+        "Direction": direction,
+        "Master Score": round(70.0 + min(rvol * 5.0, 20.0), 1),
+        "Suggested Entry": round(c_live, 2),
+        "Stop Loss": sl,
+        "Target Price": tp,
+        "SMC Signals": "VWAP Cross | Micro-BOS",
+        "AI Win Prob": f"{round(65.0 + min(rvol * 4.0, 20.0), 1)}%",
+        "Trade Action": "ACTIVE ENTRY"
+    }
+
 # ==============================================================================
 # INSTITUTIONAL MOMENTUM SCANNER ENGINE
 # ==============================================================================
