@@ -370,7 +370,7 @@ def run_meta_contrarian_analysis(df: pd.DataFrame) -> dict:
         contrarian_modifier += 4.0
         crowd_flags.append("🟢 Healthy Institutional Volume")
 
-    if is_bullish and rsi > 72:
+ if is_bullish and rsi > 72:
         contrarian_modifier -= 5.0
         crowd_flags.append("⚠️ RSI Overbought (>72)")
     elif is_bearish and rsi < 28:
@@ -412,6 +412,64 @@ def run_meta_contrarian_analysis(df: pd.DataFrame) -> dict:
         "VWAP Dist %": f"{round(vwap_dist_pct, 2)}%"
     }
 
+# ==============================================================================
+# UNIFIED MASTER CONFLUENCE ENGINE
+# ==============================================================================
+def run_unified_master_scan(symbols: list) -> pd.DataFrame:
+    """
+    Executes SMC, Momentum, and Meta-Contrarian scans in a single pass 
+    to surface high-probability confluence trades instantly.
+    """
+    master_rows = []
+    
+    for symbol in symbols:
+        df_data = fetch_data(symbol, period="1d", interval="5m")
+        if df_data.empty or len(df_data) < 35:
+            continue
+            
+        df_data.name = symbol
+        
+        # Run all three engines in parallel
+        smc = run_smc_analysis(df_data, timeframe_label="INTRADAY")
+        mom = run_momentum_leader_analysis(df_data)
+        mc  = run_meta_contrarian_analysis(df_data)
+        
+        # Filter for stocks generating at least one active signal
+        if smc or mom or mc:
+            mc_advice = mc["Actionable Advice"] if mc else "NO_FLAGS"
+            mc_status = mc["Crowd Status"] if mc else "CLEAR"
+            
+            # Determine Trade Grade Matrix
+            if smc and mom and "HIGH CONVICTION" in mc_advice:
+                grade = "🔥 A+ CONFLUENCE"
+            elif mc and "SKIP" in mc_advice:
+                grade = "⚠️ CROWD TRAP"
+            elif smc and mom:
+                grade = "🚀 HIGH MOMENTUM SMC"
+            elif smc or mom:
+                grade = "⚡ SINGLE ENGINE"
+            else:
+                grade = "👀 WATCHLIST"
+                
+            master_rows.append({
+                "Symbol": symbol,
+                "Grade": grade,
+                "Direction": smc["Direction"] if smc else (mom["Direction"] if mom else mc["Direction"]),
+                "SMC Entry": smc["Suggested Entry"] if smc else "N/A",
+                "Breakout Dist": mom["Breakout Distance"] if mom else "N/A",
+                "Contrarian Status": mc_status,
+                "AI Win Prob": smc["AI Win Prob"] if smc else (mom["AI Win Prob"] if mom else "N/A"),
+                "Action": mc_advice if mc and "SKIP" in mc_advice else (smc["Trade Action"] if smc else "MONITOR")
+            })
+            
+    df_res = pd.DataFrame(master_rows)
+    if not df_res.empty and "Grade" in df_res.columns:
+        # Custom sorting to prioritize A+ Confluences at the top
+        grade_order = {"🔥 A+ CONFLUENCE": 0, "🚀 HIGH MOMENTUM SMC": 1, "⚡ SINGLE ENGINE": 2, "👀 WATCHLIST": 3, "⚠️ CROWD TRAP": 4}
+        df_res["sort_key"] = df_res["Grade"].map(grade_order)
+        df_res = df_res.sort_values(by="sort_key").drop(columns=["sort_key"])
+        
+    return df_res  
 # ==============================================================================
 # QUANTITATIVE BACKTESTING ENGINE (FIX #1: SMC Logic, FIX #3: Limits, FIX #4: Open Trades)
 # ==============================================================================
@@ -561,10 +619,23 @@ if page == "⚡ SMC Institutional Scanner":
     st.title("⚡ SMC Institutional Scanner Engine")
     st.markdown(f"Real-time multi-timeframe quantitative scanning across **{len(symbols_to_scan)} stocks** for SMC confluences, FVG, BOS, and Momentum Leaders.")
 
-    tab_intraday, tab_swing, tab_momentum, tab_contrarian = st.tabs([
-        "⚡ Intraday SMC", "📈 Swing Signals", "🚀 Momentum Leaders", "🧠 Meta-Contrarian Engine"
-    ])
+  tab_master, tab_intraday, tab_swing, tab_momentum, tab_contrarian = st.tabs([
+    "🌟 Master Confluence", "⚡ Intraday SMC", "📈 Swing Signals", "🚀 Momentum Leaders", "🧠 Meta-Contrarian Engine"
+])
+with tab_master:
+    st.subheader("🌟 Unified Master Confluence Dashboard")
+    st.caption("Single-click live scan across SMC, Momentum, and Meta-Contrarian engines to isolate A+ confluence trades.")
+    
+    if st.button("🌟 Run Unified Master Scan", type="primary", key="btn_master_scan"):
+        with st.spinner(f"Running multi-engine confluence audit across {len(symbols_to_scan)} stocks..."):
+            master_df = run_unified_master_scan(symbols_to_scan)
+            st.session_state['master_results'] = master_df
 
+    res_master = st.session_state.get('master_results', pd.DataFrame())
+    if not res_master.empty:
+        st.dataframe(res_master.reset_index(drop=True), use_container_width=True)
+    else:
+        st.info("Click 'Run Unified Master Scan' above during market hours to evaluate all confluences in a single table.")
     with tab_intraday:
         st.subheader("⚡ Intraday SMC Scanner Engine")
         if st.button("⚡ Run Intraday SMC Scan", type="primary", key="btn_intraday_scan"):
