@@ -3,6 +3,8 @@ import pandas as pd
 import numpy as np
 import yfinance as yf
 from datetime import datetime, timedelta
+import os
+import json
 
 # Set page configuration
 st.set_page_config(
@@ -671,7 +673,7 @@ elif page == "🧪 Backtesting Engine":
         st.dataframe(bt_results, use_container_width=True)
     else:
         st.info("Configure parameters and click 'Run Backtest' to execute simulation.")
-
+        
 # ------------------------------------------------------------------------------
 # PAGE 3: VISION AI CHART PATTERN SCANNER & DIAGNOSTICS
 # ------------------------------------------------------------------------------
