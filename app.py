@@ -293,28 +293,25 @@ def run_meta_contrarian_analysis(df: pd.DataFrame) -> dict:
 # ==============================================================================
 def run_unified_master_scan(symbols: list) -> pd.DataFrame:
     """
-    Executes SMC, Momentum, and Meta-Contrarian scans in a single pass 
-    to surface high-probability confluence trades instantly.
+    Executes SMC, Momentum, and Meta-Contrarian scans in a single pass to surface high-probability confluence trades instantly.
     """
     master_rows = []
-    
     for symbol in symbols:
         df_data = fetch_data(symbol, period="5d", interval="5m")
         if df_data.empty or len(df_data) < 35:
             continue
-            
         df_data.name = symbol
-        
+
         # Run all three engines in parallel
         smc = run_smc_analysis(df_data, timeframe_label="INTRADAY")
         mom = run_momentum_leader_analysis(df_data)
         mc  = run_meta_contrarian_analysis(df_data)
-        
+
         # Filter for stocks generating at least one active signal
         if smc or mom or mc:
             mc_advice = mc["Actionable Advice"] if mc else "NO_FLAGS"
             mc_status = mc["Crowd Status"] if mc else "CLEAR"
-            
+
             # Determine Trade Grade Matrix
             if smc and mom and "HIGH CONVICTION" in mc_advice:
                 grade = "🔥 A+ CONFLUENCE"
@@ -326,8 +323,8 @@ def run_unified_master_scan(symbols: list) -> pd.DataFrame:
                 grade = "⚡ SINGLE ENGINE"
             else:
                 grade = "👀 WATCHLIST"
-                
-           master_rows.append({
+
+            master_rows.append({
                 "Symbol": symbol,
                 "Grade": grade,
                 "Direction": smc["Direction"] if smc else (mom["Direction"] if mom else mc["Direction"]),
@@ -339,15 +336,15 @@ def run_unified_master_scan(symbols: list) -> pd.DataFrame:
                 "AI Win Prob": smc["AI Win Prob"] if smc else (mom["AI Win Prob"] if mom else "N/A"),
                 "Action": mc_advice if mc and "SKIP" in mc_advice else (smc["Trade Action"] if smc else "MONITOR")
             })
-            
+
     df_res = pd.DataFrame(master_rows)
     if not df_res.empty and "Grade" in df_res.columns:
         # Custom sorting to prioritize A+ Confluences at the top
         grade_order = {"🔥 A+ CONFLUENCE": 0, "🚀 HIGH MOMENTUM SMC": 1, "⚡ SINGLE ENGINE": 2, "👀 WATCHLIST": 3, "⚠️ CROWD TRAP": 4}
         df_res["sort_key"] = df_res["Grade"].map(grade_order)
         df_res = df_res.sort_values(by="sort_key").drop(columns=["sort_key"])
-        
-    return df_res  
+
+    return df_res
 # ==============================================================================
 # QUANTITATIVE BACKTESTING ENGINE (FIX #1: SMC Logic, FIX #3: Limits, FIX #4: Open Trades)
 # ==============================================================================
