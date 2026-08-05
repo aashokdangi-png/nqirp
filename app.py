@@ -8,19 +8,17 @@ import itertools
 from sklearn.ensemble import RandomForestClassifier
 import joblib
 
-# Page Configuration
 st.set_page_config(page_title="NQIRP Institutional Quant Engine", page_icon="⚡", layout="wide")
 
-# Persistent File Paths
 INTRADAY_CFG = "intraday_config.json"
 SWING_CFG = "swing_config.json"
 INTRADAY_MODEL = "intraday_ml_model.pkl"
 SWING_MODEL = "swing_ml_model.pkl"
 
 # ==============================================================================
-# DATA ENGINE & CONFIGURATION MANAGERS
+# DATA ENGINE WITH HIGH-EFFICIENCY CACHING
 # ==============================================================================
-@st.cache_data(ttl=60)
+@st.cache_data(ttl=300)
 def fetch_data(symbol: str, period: str = "60d", interval: str = "5m") -> pd.DataFrame:
     try:
         ticker = f"{symbol}.NS" if not symbol.endswith(".NS") else symbol
@@ -45,7 +43,7 @@ def save_config(config, mode="intraday"):
         json.dump(config, f, indent=4)
 
 # ==============================================================================
-# MACHINE LEARNING CLASSIFIER & PREDICTOR
+# MACHINE LEARNING ENGINE
 # ==============================================================================
 def train_ml_model(trades_df: pd.DataFrame, mode="intraday"):
     if trades_df.empty or len(trades_df) < 15:
@@ -79,7 +77,7 @@ def predict_trade_prob(rvol, vwap_dist, rsi, atr_pct, mode="intraday"):
     return f"{prob}%", trap
 
 # ==============================================================================
-# INDICATORS & PATTERN CALCULATIONS
+# INDICATORS CALCULATOR
 # ==============================================================================
 def calculate_indicators(df: pd.DataFrame, cfg: dict):
     close, high, low, vol = df['Close'], df['High'], df['Low'], df['Volume']
@@ -110,7 +108,7 @@ def calculate_indicators(df: pd.DataFrame, cfg: dict):
     return {"c_live": c_live, "atr": atr, "ema": ema, "vwap": vwap, "rsi": rsi, "rvol": rvol, "vwap_dist": vwap_dist, "atr_pct": atr_pct}
 
 # ==============================================================================
-# LIVE SCANNER ENGINES
+# LIVE SCANNER ENGINES (USES LOADED PERMANENT CONFIGS)
 # ==============================================================================
 def run_smc_analysis(df: pd.DataFrame, timeframe_label="INTRADAY", mode="intraday"):
     if df.empty or len(df) < 30: return None
@@ -196,14 +194,11 @@ def run_master_confluence(symbols: list) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 # ==============================================================================
-# AUTONOMOUS BACKTESTER & GRID STRATEGY DISCOVERY ENGINE
+# FAST IN-MEMORY BACKTESTER & STRATEGY DISCOVERY ENGINE
 # ==============================================================================
-def run_parameterized_backtest(tickers: list, cfg: dict, mode="intraday"):
-    period = "60d" if mode == "intraday" else "1y"
-    interval = "5m" if mode == "intraday" else "1d"
+def run_parameterized_backtest_cached(data_dict: dict, cfg: dict):
     all_trades = []
-    for sym in tickers:
-        df = fetch_data(sym, period=period, interval=interval)
+    for sym, df in data_dict.items():
         if df.empty or len(df) < 40: continue
         close, high, low = df['Close'], df['High'], df['Low']
         in_trade, current_trade = False, None
@@ -247,6 +242,20 @@ def run_parameterized_backtest(tickers: list, cfg: dict, mode="intraday"):
     return pd.DataFrame(all_trades)
 
 def discover_best_strategies(tickers: list, mode="intraday"):
+    period = "60d" if mode == "intraday" else "1y"
+    interval = "5m" if mode == "intraday" else "1d"
+    
+    # 1. Pre-fetch historical data ONCE in-memory to prevent yfinance rate limits
+    st.info("Pre-loading historical data into memory...")
+    data_dict = {}
+    for sym in tickers:
+        df = fetch_data(sym, period=period, interval=interval)
+        if not df.empty and len(df) >= 40:
+            data_dict[sym] = df
+
+    if not data_dict:
+        return None, pd.DataFrame()
+
     param_grid = {
         "ema_span": [10, 20, 50],
         "atr_mult": [0.8, 1.2, 1.5, 2.0],
@@ -257,9 +266,10 @@ def discover_best_strategies(tickers: list, mode="intraday"):
     combinations = [dict(zip(keys, v)) for v in itertools.product(*values)]
     best_cfg, best_win_rate, best_trades_df = None, 0.0, pd.DataFrame()
     
+    # 2. Iterate offline over pre-fetched data
     progress = st.progress(0.0)
     for idx, cfg in enumerate(combinations):
-        trades_df = run_parameterized_backtest(tickers, cfg, mode=mode)
+        trades_df = run_parameterized_backtest_cached(data_dict, cfg)
         progress.progress((idx + 1) / len(combinations))
         if len(trades_df) < 15: continue
         win_rate = (sum(trades_df["Result"] == "WIN 🎯") / len(trades_df)) * 100
@@ -276,7 +286,7 @@ def discover_best_strategies(tickers: list, mode="intraday"):
     return best_cfg, best_trades_df
 
 # ==============================================================================
-# STREAMLIT UI NAVIGATION
+# UI NAVIGATION & CONTROLS
 # ==============================================================================
 st.sidebar.title("NQIRP Quant Engine")
 universe = st.sidebar.selectbox("Select Watchlist", ["Default Watchlist (7 Stocks)", "NIFTY 50 Expanded", "Custom Tickers"])
@@ -290,8 +300,8 @@ else:
 
 intra_cfg = load_config("intraday")
 swing_cfg = load_config("swing")
-st.sidebar.markdown(f"**Intraday AI Config:** Win Rate `{intra_cfg.get('win_rate', 'N/A')}%` | R/R `1:{intra_cfg.get('rr_ratio', 2.0)}`")
-st.sidebar.markdown(f"**Swing Daily Config:** Win Rate `{swing_cfg.get('win_rate', 'N/A')}%` | R/R `1:{swing_cfg.get('rr_ratio', 2.5)}`")
+st.sidebar.markdown(f"**Intraday Config:** Win Rate `{intra_cfg.get('win_rate', 'N/A')}%` | R/R `1:{intra_cfg.get('rr_ratio', 2.0)}`")
+st.sidebar.markdown(f"**Swing Config:** Win Rate `{swing_cfg.get('win_rate', 'N/A')}%` | R/R `1:{swing_cfg.get('rr_ratio', 2.5)}`")
 
 page = st.sidebar.radio("Select Module", ["⚡ Multi-Tab Live Scanner", "🧪 AI Strategy Discovery & Backtester"])
 
@@ -311,7 +321,7 @@ if page == "⚡ Multi-Tab Live Scanner":
     with tab_intraday:
         st.subheader("⚡ Intraday SMC Scanner Engine (5-Minute Timeframe)")
         if st.button("⚡ Run Intraday Scan", type="primary"):
-            with st.spinner("Scanning intraday 5m bars using intraday_config.json..."):
+            with st.spinner("Scanning intraday 5m bars using saved intraday_config.json..."):
                 results = [run_smc_analysis(fetch_data(s, "5d", "5m"), timeframe_label="5M INTRADAY", mode="intraday") for s in symbols]
                 df_res = pd.DataFrame([r for r in results if r])
                 st.dataframe(df_res, use_container_width=True) if not df_res.empty else st.info("No intraday setups found.")
@@ -327,7 +337,7 @@ if page == "⚡ Multi-Tab Live Scanner":
     with tab_swing:
         st.subheader("📈 Daily Swing Signals Engine (1D Daily Timeframe)")
         if st.button("📈 Run Daily Swing Scan", type="primary"):
-            with st.spinner("Scanning 1-Year Daily candles using swing_config.json..."):
+            with st.spinner("Scanning 1-Year Daily candles using saved swing_config.json..."):
                 results = [run_smc_analysis(fetch_data(s, "1y", "1d"), timeframe_label="1D DAILY SWING", mode="swing") for s in symbols]
                 df_res = pd.DataFrame([r for r in results if r])
                 st.dataframe(df_res, use_container_width=True) if not df_res.empty else st.info("No swing setups found.")
@@ -341,17 +351,17 @@ if page == "⚡ Multi-Tab Live Scanner":
                 st.dataframe(df_res, use_container_width=True) if not df_res.empty else st.info("No crowd traps detected.")
 
 elif page == "🧪 AI Strategy Discovery & Backtester":
-    st.title("🧪 AI Strategy Discovery & Machine Learning Backtester")
-    st.caption("Scans parameter combinations to isolate highest win-rate strategies and train ML models for both Intraday and Swing timeframes.")
+    st.title("🧪 Fast In-Memory Strategy Discovery Engine")
+    st.caption("Runs fast in-memory strategy discovery, saves optimal parameters to JSON, and trains ML models.")
     
     tf_mode = st.radio("Select Target Timeframe Engine to Optimize", ["Intraday (5m / 60-Day Lookback)", "Swing Daily (1D / 1-Year Lookback)"])
     target_mode = "intraday" if "Intraday" in tf_mode else "swing"
     
-    if st.button(f"🚀 Run Autonomous Strategy Discovery ({target_mode.upper()})", type="primary"):
-        with st.spinner(f"Running combinatorial optimization & training Random Forest ML Model for {target_mode.upper()}..."):
+    if st.button(f"🚀 Run Strategy Optimization ({target_mode.upper()})", type="primary"):
+        with st.spinner(f"Pre-loading data & optimizing {target_mode.upper()} parameters..."):
             best_cfg, trades_df = discover_best_strategies(symbols, mode=target_mode)
             if best_cfg:
-                st.success(f"🎉 New Winning Strategy Discovered for {target_mode.upper()}! Win Rate: {best_cfg['win_rate']}%")
+                st.success(f"🎉 Optimized Config Discovered! Win Rate: {best_cfg['win_rate']}%")
                 st.json(best_cfg)
                 st.subheader("Backtest Trade Logs Used for Machine Learning Training")
                 st.dataframe(trades_df, use_container_width=True)
