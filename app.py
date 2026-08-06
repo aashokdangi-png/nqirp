@@ -23,7 +23,7 @@ SWING_MODEL = "swing_ml_model.pkl"
 UPSTOX_ISIN_MAP = {
     "RELIANCE": "NSE_EQ|INE002A01018",
     "TCS": "NSE_EQ|INE467B01029",
-    "INFY": "NSE_EQ|INE090A01021",
+    "INFY": "NSE_EQ|INE009A01021",
     "HDFCBANK": "NSE_EQ|INE040A01034",
     "ICICIBANK": "NSE_EQ|INE090A01013",
     "REDINGTON": "NSE_EQ|INE891D01026",
@@ -114,11 +114,11 @@ def fetch_upstox_live(symbol: str, interval: str = "5m") -> pd.DataFrame | None:
         instrument_key = urllib.parse.quote(raw_key, safe="")
         interval_str = str(interval).lower().strip()
 
-        # DAILY TIMEFRAME: Query Upstox Historical V3 for multi-day history
-        if "day" in interval_str or "1d" in interval_str:
-            to_date = datetime.now().strftime("%Y-%m-%d")
-            from_date = (datetime.now() - timedelta(days=120)).strftime("%Y-%m-%d")
-            url = f"https://api.upstox.com/v3/historical-candle/{instrument_key}/days/1/{to_date}/{from_date}"
+       # DAILY TIMEFRAME: Query Upstox Historical V3 (use singular 'day')
+       if "day" in interval_str or "1d" in interval_str:
+       to_date = datetime.now().strftime("%Y-%m-%d")
+       from_date = (datetime.now() - timedelta(days=120)).strftime("%Y-%m-%d")
+       url = f"https://api.upstox.com/v3/historical-candle/{instrument_key}/day/1/{to_date}/{from_date}"
         else:
             # INTRADAY TIMEFRAME: Query Upstox Intraday V3 endpoint (/minutes/5)
             digits = "".join(filter(str.isdigit, interval_str))
@@ -169,7 +169,7 @@ def fetch_historical_backtest_data(
     formatted_symbol = symbol if (".NS" in symbol or "^" in symbol) else f"{symbol}.NS"
     try:
         ticker = yf.Ticker(formatted_symbol)
-        df = ticker.history(period=period, interval=interval, auto_adjust=False)
+        df = ticker.history(period=period, interval=interval, auto_adjust=True)
         if not df.empty:
             if isinstance(df.columns, pd.MultiIndex):
                 df.columns = df.columns.get_level_values(0)
