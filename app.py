@@ -104,14 +104,15 @@ def fetch_upstox_live(symbol: str, interval: str = "5m") -> pd.DataFrame | None:
             return None
 
         raw_key = get_upstox_instrument_key(symbol)
-        # Safely URL-encode the instrument key so the '|' character becomes '%7C'
         instrument_key = urllib.parse.quote(raw_key, safe="")
 
-        # Official Upstox V3 Intraday endpoint format
+        # Properly map app interval format to Upstox V3 path parameters
         if interval in ["day", "1d", "daily"]:
             url = f"https://api.upstox.com/v3/historical-candle/intraday/{instrument_key}/days/1"
         else:
-            url = f"https://api.upstox.com/v3/historical-candle/intraday/{instrument_key}/minutes/5"
+            # Extract digits from interval string (e.g., '5m' -> '5', default to '5' if missing)
+            digit_interval = "".join(filter(str.isdigit, interval)) or "5"
+            url = f"https://api.upstox.com/v3/historical-candle/intraday/{instrument_key}/minutes/{digit_interval}"
 
         headers = {
             "Accept": "application/json",
