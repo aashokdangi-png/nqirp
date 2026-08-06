@@ -106,11 +106,9 @@ def fetch_upstox_live(symbol: str, interval: str = "5m") -> pd.DataFrame | None:
         raw_key = get_upstox_instrument_key(symbol)
         instrument_key = urllib.parse.quote(raw_key, safe="")
 
-        # Properly map app interval format to Upstox V3 path parameters
         if interval in ["day", "1d", "daily"]:
             url = f"https://api.upstox.com/v3/historical-candle/intraday/{instrument_key}/days/1"
         else:
-            # Extract digits from interval string (e.g., '5m' -> '5', default to '5' if missing)
             digit_interval = "".join(filter(str.isdigit, interval)) or "5"
             url = f"https://api.upstox.com/v3/historical-candle/intraday/{instrument_key}/minutes/{digit_interval}"
 
