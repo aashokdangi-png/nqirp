@@ -97,22 +97,21 @@ def get_upstox_access_token() -> str | None:
     return None
 
 
-def get_upstox_instrument_key(symbol: str) -> str:
-    clean_sym = symbol.replace(".NS", "").upper().strip()
-    return UPSTOX_ISIN_MAP.get(clean_sym, f"NSE_EQ|{clean_sym}")
-
-
-def fetch_upstox_live(symbol: str, interval: str = "5m") -> float | None:
-    """Fetches strictly the free real-time Last Traded Price (LTP) from Upstox."""
+def fetch_upstox_live(symbol: str, interval: str = "5m") -> pd.DataFrame | None:
     try:
         access_token = get_upstox_access_token()
         if not access_token:
             return None
 
         instrument_key = get_upstox_instrument_key(symbol)
-        encoded_key = urllib.parse.quote(instrument_key, safe="")
+        
+        # Map app intervals to Upstox V3 parameters
+        if interval in ["day", "1d", "daily"]:
+            url = f"https://api.upstox.com/v3/historical-candle/intraday/{instrument_key}/days/1"
+        else:
+            # V3 native support for 5-minute intervals using /minutes/5
+            url = f"https://api.upstox.com/v3/historical-candle/intraday/{instrument_key}/minutes/5"
 
-        url = f"https://api.upstox.com/v2/market-quote/ltp?instrument_key={encoded_key}"
         headers = {
             "Accept": "application/json",
             "Authorization": f"Bearer {access_token}",
@@ -120,11 +119,26 @@ def fetch_upstox_live(symbol: str, interval: str = "5m") -> float | None:
 
         res = requests.get(url, headers=headers, timeout=5)
         if res.status_code == 200:
-            data = res.json().get("data", {})
-            quote_data = data.get(instrument_key, {})
-            last_price = quote_data.get("last_price")
-            if last_price:
-                return float(last_price)
+            raw_candles = res.json().get("data", {}).get("candles", [])
+            if raw_candles:
+                df = pd.DataFrame(
+                    raw_candles,
+                    columns=[
+                        "Datetime",
+                        "Open",
+                        "High",
+                        "Low",
+                        "Close",
+                        "Volume",
+                        "OI",
+                    ],
+                )
+                df["Datetime"] = pd.to_datetime(df["Datetime"])
+                df = df.sort_values("Datetime").reset_index(drop=True)
+                for col in ["Open", "High", "Low", "Close", "Volume"]:
+                    df[col] = pd.to_numeric(df[col], errors="coerce")
+                df = df[df["Volume"] > 0].reset_index(drop=True)
+                return df
     except Exception:
         pass
     return None
