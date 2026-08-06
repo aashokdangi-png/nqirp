@@ -87,6 +87,16 @@ def save_config(cfg: dict, mode="intraday"):
         json.dump(cfg, f, indent=4)
 
 
+# --- MISSING UPSTOX TOKEN RESOLVER ---
+def get_upstox_access_token() -> str | None:
+    try:
+        if "UPSTOX_ACCESS_TOKEN" in st.secrets:
+            return st.secrets["UPSTOX_ACCESS_TOKEN"]
+        return os.getenv("UPSTOX_ACCESS_TOKEN", None)
+    except Exception:
+        return None
+
+
 # --- MISSING INSTRUMENT KEY RESOLVER ---
 def get_upstox_instrument_key(symbol: str) -> str:
     clean_sym = symbol.upper().replace(".NS", "").replace("&", "_").strip()
