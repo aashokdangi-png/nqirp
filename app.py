@@ -938,7 +938,7 @@ with st.sidebar.expander("🔍 Live Upstox API Diagnostic", expanded=True):
     st.write(f"**Token Detected:** `{bool(diag_token)}`")
     if diag_token:
         # Test request directly to Upstox RELIANCE intraday endpoint
-        test_url = "https://api.upstox.com/v2/historical-candle/intraday/NSE_EQ%7CINE002A01018/5minute"
+        test_url = "https://api.upstox.com/v3/historical-candle/intraday/NSE_EQ%7CINE002A01018/minutes/5"
         test_headers = {
             "Accept": "application/json",
             "Authorization": f"Bearer {diag_token}",
