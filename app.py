@@ -18,33 +18,64 @@ SWING_MODEL = "swing_ml_model.pkl"
 # ==============================================================================
 # DATA ENGINE (FAST CACHED FETCHING)
 # ==============================================================================
-@st.cache_data(ttl=15)
-def fetch_data(symbol: str, period: str = "1mo", interval: str = "5m") -> pd.DataFrame:
-    try:
-        ticker = f"{symbol}.NS" if not symbol.endswith(".NS") else symbol
-        df = yf.download(ticker, period=period, interval=interval, progress=False, timeout=10)
-        if df.empty: return pd.DataFrame()
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.get_level_values(0)
-        df.dropna(inplace=True)
-        return df
-    except Exception:
-        return pd.DataFrame()
+import requests
 
-def load_config(mode="intraday"):
-    filepath = INTRADAY_CFG if mode == "intraday" else SWING_CFG
-    default_cfg = {"ema_span": 20, "atr_mult": 1.2, "rr_ratio": 2.0, "min_rvol": 1.0, "win_rate": 0.0} if mode == "intraday" else {"ema_span": 50, "atr_mult": 2.0, "rr_ratio": 2.5, "min_rvol": 1.0, "win_rate": 0.0}
-    if os.path.exists(filepath):
-        try:
-            with open(filepath, "r") as f:
-                return json.load(f)
-        except Exception:
-            return default_cfg
-    return default_cfg
-def save_config(config, mode="intraday"):
-    filepath = INTRADAY_CFG if mode == "intraday" else SWING_CFG
-    with open(filepath, "w") as f:
-        json.dump(config, f, indent=4)
+
+def fetch_upstox_data(
+    symbol: str, interval: str = "5minute"
+) -> pd.DataFrame | None:
+    try:
+        access_token = st.secrets.get("eyJ0eXAiOiJKV1QiLCJrZXlfaWQiOiJza192MS4wIiwiYWxnIjoiSFMyNTYifQ.eyJzdWIiOiIyS0JGN0oiLCJqdGkiOiI2YTc0NTAxZDdmNGU1MjNhOTllMzA2ZDYiLCJpc011bHRpQ2xpZW50IjpmYWxzZSwiaXNQbHVzUGxhbiI6dHJ1ZSwiaXNFeHRlbmRlZCI6dHJ1ZSwiaWF0IjoxNzg2MDA3NTgxLCJpc3MiOiJ1ZGFwaS1nYXRld2F5LXNlcnZpY2UiLCJleHAiOjE4MTc1ODk2MDB9.6lZrATNZ7-JX3k_ahLH-RJzQR2496bZbbWADMaV6hUM", None)
+        if not access_token:
+            return None
+
+        clean_symbol = symbol.replace(".NS", "").upper()
+        url = f"https://api.upstox.com/v2/historical-candle/intraday/NSE_EQ%7C{clean_symbol}/{interval}"
+        headers = {
+            "Accept": "application/json",
+            "Authorization": f"Bearer {access_token}",
+        }
+
+        res = requests.get(url, headers=headers, timeout=3)
+        if res.status_code == 200:
+            raw_candles = res.json().get("data", {}).get("candles", [])
+            if raw_candles:
+                df = pd.DataFrame(
+                    raw_candles,
+                    columns=[
+                        "Datetime",
+                        "Open",
+                        "High",
+                        "Low",
+                        "Close",
+                        "Volume",
+                        "OI",
+                    ],
+                )
+                df["Datetime"] = pd.to_datetime(df["Datetime"])
+                df = df.sort_values("Datetime").reset_index(drop=True)
+                return df
+    except Exception:
+        pass
+    return None
+
+
+@st.cache_data(ttl=15)
+def fetch_data(
+    symbol: str, period: str = "1mo", interval: str = "5m"
+) -> pd.DataFrame:
+    up_interval = "5minute" if interval == "5m" else "day"
+    df_upstox = fetch_upstox_data(symbol, interval=up_interval)
+    if df_upstox is not None and not df_upstox.empty and len(df_upstox) > 20:
+        return df_upstox
+
+    formatted_symbol = symbol if ".NS" in symbol else f"{symbol}.NS"
+    df_yf = yf.download(
+        formatted_symbol, period=period, interval=interval, progress=False
+    )
+    if isinstance(df_yf.columns, pd.MultiIndex):
+        df_yf.columns = df_yf.columns.get_level_values(0)
+    return df_yf.reset_index()
 
 # ==============================================================================
 # MACHINE LEARNING ENGINE
