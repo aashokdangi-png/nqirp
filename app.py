@@ -461,12 +461,26 @@ def run_momentum_analysis(df: pd.DataFrame, symbol: str, mode="intraday"):
     win_prob, trap_risk = predict_trade_prob(
         last["RVOL"], last["VWAP_Dist_Pct"], last["RSI"], last["ATR_Pct"], mode
     )
+    # --- TRIGGER LEVEL & EXTENSION CALCULATION ---
+    trigger_level = h20 if is_bull else l20
+    ext_pct = (
+        ((c_live - trigger_level) / trigger_level) * 100
+        if is_bull
+        else ((trigger_level - c_live) / trigger_level) * 100
+    )
+    entry_status = (
+        "⚠️ EXTENDED (CHASE RISK)" if ext_pct > 1.5 else "🔥 VALID TRIGGER ENTRY"
+    )
+
     return {
         "Symbol": symbol,
         "Direction": (
             "🔥 BULLISH MOMENTUM" if is_bull else "BEARISH MOMENTUM"
         ),
         "Current Price": round(c_live, 2),
+        "Trigger Level": round(trigger_level, 2),  # <--- ADDED
+        "Extension %": f"{round(ext_pct, 2)}%",  # <--- ADDED
+        "Entry Status": entry_status,  # <--- ADDED
         "Suggested Entry": entry,
         "Stop Loss": sl,
         "Target Price": tp,
@@ -477,8 +491,7 @@ def run_momentum_analysis(df: pd.DataFrame, symbol: str, mode="intraday"):
         "AI Win Prob": win_prob,
         "Trap Risk": trap_risk,
     }
-
-
+   
 def run_meta_contrarian_analysis(
     df: pd.DataFrame, symbol: str, mode="intraday"
 ):
@@ -509,21 +522,36 @@ def run_meta_contrarian_analysis(
     win_prob, _ = predict_trade_prob(
         last["RVOL"], last["VWAP_Dist_Pct"], last["RSI"], last["ATR_Pct"], mode
     )
+   # --- TRIGGER LEVEL & EXTENSION CALCULATION ---
+    recent_high = float(df["High"].tail(15).iloc[:-1].max())
+    recent_low = float(df["Low"].tail(15).iloc[:-1].min())
+    trigger_level = recent_high if is_bull else recent_low
+    ext_pct = (
+        ((c_live - trigger_level) / trigger_level) * 100
+        if is_bull
+        else ((trigger_level - c_live) / trigger_level) * 100
+    )
+    entry_status = (
+        "⚠️ EXTENDED (CHASE RISK)" if ext_pct > 1.5 else "🔥 VALID TRIGGER ENTRY"
+    )
+
     return {
         "Symbol": symbol,
         "Direction": "BULLISH" if is_bull else "BEARISH",
+        "Current Price": round(c_live, 2),
+        "Trigger Level": round(trigger_level, 2),  # <--- ADDED
+        "Extension %": f"{round(ext_pct, 2)}%",  # <--- ADDED
+        "Entry Status": entry_status,  # <--- ADDED
         "Re-Ranked Score": round(score, 1),
         "Crowd Diagnostics": (
             " | ".join(flags) if flags else "Optimal Setup"
         ),
         "SMC Structure": smc_patterns["SMC_Structure"],
         "Chart Pattern": smc_patterns["Pattern"],
-        "Current Price": round(c_live, 2),
         "RVOL": round(last["RVOL"], 2),
         "RSI": round(last["RSI"], 1),
         "AI Win Prob": win_prob,
     }
-
 
 def run_master_confluence(symbols: list) -> pd.DataFrame:
     rows = []
