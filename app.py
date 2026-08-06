@@ -402,22 +402,20 @@ def run_smc_analysis(
     is_bear = c_live < vwap and c_live < ema and rvol >= cfg.get("min_rvol", 1.0)
     if not (is_bull or is_bear):
         return None
-   direction = "BULLISH" if is_bull else "BEARISH"
+        
+    direction = "BULLISH" if is_bull else "BEARISH"
     
     # --- TRUE STRUCTURAL BREAKOUT / TRIGGER POINT ---
-    # Find the actual recent structural high/low breakout reference
-    recent_high = float(df["High"].tail(10).iloc[:-1].max())  # Prior breakout level
-    recent_low = float(df["Low"].tail(10).iloc[:-1].min())    # Prior breakdown level
+    recent_high = float(df["High"].tail(10).iloc[:-1].max())
+    recent_low = float(df["Low"].tail(10).iloc[:-1].min())
     
     breakout_level = recent_high if is_bull else recent_low
     
-    # Calculate how far current price has run past the exact trigger level
     if is_bull:
         extension_pct = ((c_live - breakout_level) / breakout_level) * 100
     else:
         extension_pct = ((breakout_level - c_live) / breakout_level) * 100
 
-    # If the stock has already moved > 1.5% past the trigger point, it's overextended
     is_extended = extension_pct > 1.5
     action_status = "⚠️ EXTENDED (CHASE RISK)" if is_extended else "🔥 VALID TRIGGER ENTRY"
     # -----------------------------------------------
@@ -434,9 +432,9 @@ def run_smc_analysis(
         "Timeframe": timeframe_label,
         "Direction": direction,
         "Current Price": round(c_live, 2),
-        "Trigger Level": round(breakout_level, 2),  # Exact structural price where breakout occurred
-        "Extension %": f"{round(extension_pct, 2)}%",  # How far it ran past the trigger
-        "Entry Status": action_status,             # Warns you if it's too late to enter
+        "Trigger Level": round(breakout_level, 2),
+        "Extension %": f"{round(extension_pct, 2)}%",
+        "Entry Status": action_status,
         "Stop Loss": sl,
         "Target Price": tp,
         "SMC Structure": smc_patterns["SMC_Structure"],
