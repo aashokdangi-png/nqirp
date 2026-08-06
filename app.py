@@ -1,6 +1,7 @@
 import json
 import os
 import itertools
+from datetime import datetime, timedelta
 import joblib
 import numpy as np
 import pandas as pd
@@ -54,24 +55,32 @@ def save_config(cfg: dict, mode="intraday"):
 
 
 # ==============================================================================
-# ENHANCED DATA ENGINE (ROBUST MULTI-PROVIDER FETCHING)
+# HYBRID DATA ENGINE: UPSTOX (LIVE SCANNING) + YAHOO FINANCE (HISTORICAL BACKTEST)
 # ==============================================================================
-def fetch_upstox_data(
-    symbol: str, interval: str = "5minute"
-) -> pd.DataFrame | None:
+def fetch_upstox_live(symbol: str, interval: str = "5m") -> pd.DataFrame | None:
+    """Fetches real-time market data directly from Upstox API v2 endpoints."""
     try:
         access_token = st.secrets.get("UPSTOX_ACCESS_TOKEN", None)
         if not access_token:
             return None
 
         clean_symbol = symbol.replace(".NS", "").upper()
-        url = f"https://api.upstox.com/v2/historical-candle/intraday/NSE_EQ%7C{clean_symbol}/{interval}"
+        encoded_key = f"NSE_EQ%7C{clean_symbol}"
+
+        if interval in ["day", "1d", "daily"]:
+            to_date = datetime.now().strftime("%Y-%m-%d")
+            from_date = (datetime.now() - timedelta(days=365)).strftime("%Y-%m-%d")
+            url = f"https://api.upstox.com/v2/historical-candle/{encoded_key}/day/{to_date}/{from_date}"
+        else:
+            up_interval = "5minute" if interval == "5m" else interval
+            url = f"https://api.upstox.com/v2/historical-candle/intraday/{encoded_key}/{up_interval}"
+
         headers = {
             "Accept": "application/json",
             "Authorization": f"Bearer {access_token}",
         }
 
-        res = requests.get(url, headers=headers, timeout=4)
+        res = requests.get(url, headers=headers, timeout=5)
         if res.status_code == 200:
             raw_candles = res.json().get("data", {}).get("candles", [])
             if raw_candles:
@@ -97,33 +106,31 @@ def fetch_upstox_data(
     return None
 
 
-@st.cache_data(ttl=60)
-def fetch_data(
-    symbol: str, period: str = "1mo", interval: str = "5m"
+@st.cache_data(ttl=10)
+def fetch_live_data(
+    symbol: str, period: str = "5d", interval: str = "5m"
 ) -> pd.DataFrame:
-    # 1. Attempt Upstox Fetch
-    up_interval = "5minute" if interval == "5m" else "day"
-    df_upstox = fetch_upstox_data(symbol, interval=up_interval)
-    if df_upstox is not None and not df_upstox.empty and len(df_upstox) > 20:
+    """Primary fetcher for LIVE SCANS: Tries Upstox API first; falls back to yfinance."""
+    df_upstox = fetch_upstox_live(symbol, interval=interval)
+    if df_upstox is not None and not df_upstox.empty and len(df_upstox) > 15:
         return df_upstox
 
-    # 2. Fallback to Yahoo Finance (Ticker History primary, Download secondary)
-    formatted_symbol = symbol if ".NS" in symbol or "^" in symbol else f"{symbol}.NS"
+    # Fallback to Yahoo Finance if Upstox token is inactive or fails
+    return fetch_historical_backtest_data(symbol, period=period, interval=interval)
+
+
+def fetch_historical_backtest_data(
+    symbol: str, period: str = "1mo", interval: str = "5m"
+) -> pd.DataFrame:
+    """Dedicated fetcher for HISTORICAL BACKTESTING via Yahoo Finance."""
+    formatted_symbol = symbol if (".NS" in symbol or "^" in symbol) else f"{symbol}.NS"
     try:
         ticker = yf.Ticker(formatted_symbol)
         df = ticker.history(period=period, interval=interval)
-
-        if df.empty:
-            df = yf.download(
-                formatted_symbol, period=period, interval=interval, progress=False
-            )
-
         if not df.empty:
             if isinstance(df.columns, pd.MultiIndex):
                 df.columns = df.columns.get_level_values(0)
-
             df = df.reset_index()
-
             date_col = next(
                 (col for col in df.columns if col.lower() in ["date", "datetime", "index"]),
                 None,
@@ -132,13 +139,12 @@ def fetch_data(
                 df.rename(columns={date_col: "Datetime"}, inplace=True)
 
             req_cols = ["Open", "High", "Low", "Close", "Volume"]
-            if all(col in df.columns for col in req_cols):
+            if all(col in df.columns for col in req_cols) and len(df) > 10:
                 for col in req_cols:
                     df[col] = pd.to_numeric(df[col], errors="coerce")
                 return df.dropna(subset=req_cols).reset_index(drop=True)
     except Exception:
         pass
-
     return pd.DataFrame()
 
 
@@ -202,8 +208,17 @@ def attach_vectorized_indicators(df: pd.DataFrame, ema_span: int):
     loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
     rs = gain / loss.replace(0, 1e-9)
     d["RSI"] = (100 - (100 / (1 + rs))).fillna(50.0)
+
     tp = (high + low + close) / 3
-    d["VWAP"] = (tp * vol).cumsum() / vol.cumsum().replace(0, 1e-9)
+    if "Datetime" in d.columns:
+        d["Date_Group"] = pd.to_datetime(d["Datetime"]).dt.date
+        tp_vol = tp * vol
+        cum_tp_vol = tp_vol.groupby(d["Date_Group"]).cumsum()
+        cum_vol = vol.groupby(d["Date_Group"]).cumsum().replace(0, 1e-9)
+        d["VWAP"] = cum_tp_vol / cum_vol
+    else:
+        d["VWAP"] = (tp * vol).cumsum() / vol.cumsum().replace(0, 1e-9)
+
     v20 = vol.rolling(20).mean().replace(0, 1e-9)
     d["RVOL"] = (vol / v20).fillna(1.0)
     d["VWAP_Dist_Pct"] = (close - d["VWAP"]).abs() / d["VWAP"] * 100
@@ -451,16 +466,45 @@ def run_meta_contrarian_analysis(
 def run_master_confluence(symbols: list) -> pd.DataFrame:
     rows = []
     for sym in symbols:
-        df_5m = fetch_data(sym, period="5d", interval="5m")
+        df_5m = fetch_live_data(sym, period="5d", interval="5m")
         if df_5m.empty:
             continue
         smc = run_smc_analysis(df_5m, sym, timeframe_label="INTRADAY", mode="intraday")
         mom = run_momentum_analysis(df_5m, sym, mode="intraday")
         mc = run_meta_contrarian_analysis(df_5m, sym, mode="intraday")
-        if smc and mom and mc:
+
+        matches = [m for m in [smc, mom, mc] if m is not None]
+        if len(matches) >= 2:
+            base = smc or mom or mc
+            grade = (
+                "💎 TRIPLE ENGINE GEM"
+                if len(matches) == 3
+                else "⚡ DOUBLE CONFLUENCE SETUP"
+            )
+            action = (
+                "🔥 HIGH CONVICTION ENTRY"
+                if len(matches) == 3
+                else "🎯 QUANT CONFIRMED ENTRY"
+            )
             rows.append({
                 "Symbol": sym,
-                "Grade": "💎 TRIPLE ENGINE GEM",
+                "Grade": grade,
+                "Direction": base.get("Direction", "BULLISH"),
+                "Entry": base.get("Suggested Entry", base.get("Current Price", 0)),
+                "Stop Loss": base.get("Stop Loss", 0),
+                "Target Price": base.get("Target Price", 0),
+                "SMC Structure": base.get("SMC Structure", "NEUTRAL"),
+                "Order Block": base.get("Order Block", "NONE"),
+                "FVG Status": base.get("FVG Status", "NONE"),
+                "Chart Pattern": base.get("Chart Pattern", "NONE"),
+                "AI Win Prob": base.get("AI Win Prob", "50%"),
+                "Trap Risk": base.get("Trap Risk", "LOW"),
+                "Action": action,
+            })
+        elif len(matches) == 1 and smc:
+            rows.append({
+                "Symbol": sym,
+                "Grade": "📊 SINGLE ENGINE SIGNAL",
                 "Direction": smc["Direction"],
                 "Entry": smc["Suggested Entry"],
                 "Stop Loss": smc["Stop Loss"],
@@ -471,7 +515,7 @@ def run_master_confluence(symbols: list) -> pd.DataFrame:
                 "Chart Pattern": smc["Chart Pattern"],
                 "AI Win Prob": smc["AI Win Prob"],
                 "Trap Risk": smc["Trap Risk"],
-                "Action": "🔥 HIGH CONVICTION ENTRY",
+                "Action": "👀 WATCHLIST CANDIDATE",
             })
     return pd.DataFrame(rows)
 
@@ -599,15 +643,15 @@ def run_fast_backtest(df: pd.DataFrame, sym: str, cfg: dict):
 def discover_best_strategies(tickers: list, mode="intraday"):
     period = "1mo" if mode == "intraday" else "1y"
     interval = "5m" if mode == "intraday" else "1d"
-    st.info("Pre-loading historical market data...")
+    st.info("Pre-loading historical backtest market data via Yahoo Finance...")
     raw_data = {}
     for sym in tickers:
-        df = fetch_data(sym, period=period, interval=interval)
+        df = fetch_historical_backtest_data(sym, period=period, interval=interval)
         if not df.empty and len(df) >= 40:
             raw_data[sym] = df
     if not raw_data:
         st.error(
-            "Unable to fetch market data. Please verify ticker symbols or API connections."
+            "Unable to fetch historical backtest data. Please verify ticker symbols."
         )
         return None, pd.DataFrame()
     param_grid = {
@@ -716,7 +760,7 @@ if page == "⚡ Multi-Tab Live Scanner":
     with tab_master:
         st.subheader("🌟 Unified Master Confluence Dashboard")
         if st.button("🌟 Run Unified Master Scan", type="primary"):
-            with st.spinner("Executing triple-engine scan on 5m data..."):
+            with st.spinner("Executing triple-engine scan on live 5m data..."):
                 res = run_master_confluence(symbols)
                 if not res.empty:
                     st.dataframe(res, use_container_width=True)
@@ -727,11 +771,11 @@ if page == "⚡ Multi-Tab Live Scanner":
         st.subheader("⚡ Intraday SMC Scanner Engine (5-Minute Timeframe)")
         if st.button("⚡ Run Intraday Scan", type="primary"):
             with st.spinner(
-                "Scanning intraday 5m bars using saved intraday_config.json..."
+                "Scanning intraday 5m live Upstox candles using saved intraday_config.json..."
             ):
                 results = [
                     run_smc_analysis(
-                        fetch_data(s, "5d", "5m"),
+                        fetch_live_data(s, "5d", "5m"),
                         s,
                         timeframe_label="5M INTRADAY",
                         mode="intraday",
@@ -747,9 +791,11 @@ if page == "⚡ Multi-Tab Live Scanner":
     with tab_momentum:
         st.subheader("🚀 Momentum Leaders Engine (5-Minute Timeframe)")
         if st.button("🚀 Run Momentum Scan", type="primary"):
-            with st.spinner("Scanning momentum leaders on 5m data..."):
+            with st.spinner("Scanning momentum leaders on live 5m Upstox candles..."):
                 results = [
-                    run_momentum_analysis(fetch_data(s, "5d", "5m"), s, mode="intraday")
+                    run_momentum_analysis(
+                        fetch_live_data(s, "5d", "5m"), s, mode="intraday"
+                    )
                     for s in symbols
                 ]
                 df_res = pd.DataFrame([r for r in results if r])
@@ -762,11 +808,11 @@ if page == "⚡ Multi-Tab Live Scanner":
         st.subheader("📈 Daily Swing Signals Engine (1D Daily Timeframe)")
         if st.button("📈 Run Daily Swing Scan", type="primary"):
             with st.spinner(
-                "Scanning 1-Year Daily candles using saved swing_config.json..."
+                "Scanning 1-Year Daily Upstox candles using saved swing_config.json..."
             ):
                 results = [
                     run_smc_analysis(
-                        fetch_data(s, "1y", "1d"),
+                        fetch_live_data(s, "1y", "1d"),
                         s,
                         timeframe_label="1D DAILY SWING",
                         mode="swing",
@@ -782,10 +828,10 @@ if page == "⚡ Multi-Tab Live Scanner":
     with tab_contrarian:
         st.subheader("🧠 Meta-Contrarian Crowd Exhaustion Engine")
         if st.button("🧠 Run Meta-Contrarian Scan", type="primary"):
-            with st.spinner("Scanning crowd traps and overextension..."):
+            with st.spinner("Scanning crowd traps and live overextension..."):
                 results = [
                     run_meta_contrarian_analysis(
-                        fetch_data(s, "5d", "5m"), s, mode="intraday"
+                        fetch_live_data(s, "5d", "5m"), s, mode="intraday"
                     )
                     for s in symbols
                 ]
@@ -798,8 +844,8 @@ if page == "⚡ Multi-Tab Live Scanner":
 elif page == "🧪 AI Strategy Discovery & Backtester":
     st.title("🧪 Fast In-Memory Strategy Discovery Engine")
     st.caption(
-        "Runs fast in-memory strategy discovery, saves optimal parameters to"
-        " JSON, and trains ML models."
+        "Runs fast in-memory strategy discovery on Yahoo Finance historical datasets,"
+        " saves optimal parameters to JSON, and trains ML models."
     )
 
     tf_mode = st.radio(
@@ -815,7 +861,7 @@ elif page == "🧪 AI Strategy Discovery & Backtester":
         f"🚀 Run Strategy Optimization ({target_mode.upper()})", type="primary"
     ):
         with st.spinner(
-            f"Pre-loading data & optimizing {target_mode.upper()} parameters..."
+            f"Pre-loading historical data & optimizing {target_mode.upper()} parameters..."
         ):
             best_cfg, trades_df = discover_best_strategies(symbols, mode=target_mode)
             if best_cfg:
