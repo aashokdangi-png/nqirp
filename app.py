@@ -33,11 +33,14 @@ def fetch_data(symbol: str, period: str = "1mo", interval: str = "5m") -> pd.Dat
 
 def load_config(mode="intraday"):
     filepath = INTRADAY_CFG if mode == "intraday" else SWING_CFG
+    default_cfg = {"ema_span": 20, "atr_mult": 1.2, "rr_ratio": 2.0, "min_rvol": 1.0, "win_rate": 0.0} if mode == "intraday" else {"ema_span": 50, "atr_mult": 2.0, "rr_ratio": 2.5, "min_rvol": 1.0, "win_rate": 0.0}
     if os.path.exists(filepath):
-        with open(filepath, "r") as f:
-            return json.load(f)
-    return {"ema_span": 20, "atr_mult": 1.2, "rr_ratio": 2.0, "min_rvol": 1.0, "win_rate": 0.0} if mode == "intraday" else {"ema_span": 50, "atr_mult": 2.0, "rr_ratio": 2.5, "min_rvol": 1.0, "win_rate": 0.0}
-
+        try:
+            with open(filepath, "r") as f:
+                return json.load(f)
+        except Exception:
+            return default_cfg
+    return default_cfg
 def save_config(config, mode="intraday"):
     filepath = INTRADAY_CFG if mode == "intraday" else SWING_CFG
     with open(filepath, "w") as f:
