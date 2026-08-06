@@ -103,9 +103,11 @@ def fetch_upstox_live(symbol: str, interval: str = "5m") -> pd.DataFrame | None:
         if not access_token:
             return None
 
-        instrument_key = get_upstox_instrument_key(symbol)
-        
-        # Upstox V3 Intraday Candle Endpoint for 5-minute intervals
+        raw_key = get_upstox_instrument_key(symbol)
+        # Safely URL-encode the instrument key so the '|' character becomes '%7C'
+        instrument_key = urllib.parse.quote(raw_key, safe="")
+
+        # Official Upstox V3 Intraday endpoint format
         if interval in ["day", "1d", "daily"]:
             url = f"https://api.upstox.com/v3/historical-candle/intraday/{instrument_key}/days/1"
         else:
