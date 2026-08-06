@@ -116,7 +116,7 @@ def fetch_upstox_live(symbol: str, interval: str = "5m") -> pd.DataFrame | None:
             from_date = (datetime.now() - timedelta(days=365)).strftime("%Y-%m-%d")
             url = f"https://api.upstox.com/v2/historical-candle/{encoded_key}/day/{to_date}/{from_date}"
         else:
-            # Query 1minute candles (valid Upstox v2 interval)
+            # Force URL to use '1minute' strictly to avoid Upstox UDAPI1076 error
             url = f"https://api.upstox.com/v2/historical-candle/intraday/{encoded_key}/1minute"
 
         headers = {
@@ -146,7 +146,7 @@ def fetch_upstox_live(symbol: str, interval: str = "5m") -> pd.DataFrame | None:
                     df[col] = pd.to_numeric(df[col], errors="coerce")
                 df = df[df["Volume"] > 0].reset_index(drop=True)
 
-                # Resample 1m Upstox data into 5m candles for scanner calculations
+                # Resample 1m candles into 5m candles locally for your quant engine
                 if interval == "5m" and not df.empty:
                     df.set_index("Datetime", inplace=True)
                     df_5m = (
