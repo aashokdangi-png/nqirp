@@ -16,13 +16,14 @@ INTRADAY_MODEL = "intraday_ml_model.pkl"
 SWING_MODEL = "swing_ml_model.pkl"
 
 # ==============================================================================
-# DATA ENGINE WITH HIGH-EFFICIENCY CACHING
+# DATA ENGINE (FAST CACHED FETCHING)
 # ==============================================================================
-@st.cache_data(ttl=300)
-def fetch_data(symbol: str, period: str = "60d", interval: str = "5m") -> pd.DataFrame:
+@st.cache_data(ttl=600)
+def fetch_data(symbol: str, period: str = "1mo", interval: str = "5m") -> pd.DataFrame:
     try:
         ticker = f"{symbol}.NS" if not symbol.endswith(".NS") else symbol
-        df = yf.download(ticker, period=period, interval=interval, progress=False)
+        df = yf.download(ticker, period=period, interval=interval, progress=False, timeout=10)
+        if df.empty: return pd.DataFrame()
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
         df.dropna(inplace=True)
@@ -46,7 +47,7 @@ def save_config(config, mode="intraday"):
 # MACHINE LEARNING ENGINE
 # ==============================================================================
 def train_ml_model(trades_df: pd.DataFrame, mode="intraday"):
-    if trades_df.empty or len(trades_df) < 15:
+    if trades_df.empty or len(trades_df) < 10:
         return False
     features = ["RVOL", "VWAP_Dist_Pct", "RSI", "ATR_Pct"]
     for col in features:
@@ -56,10 +57,9 @@ def train_ml_model(trades_df: pd.DataFrame, mode="intraday"):
     y = (trades_df["Result"] == "WIN 🎯").astype(int)
     if len(np.unique(y)) < 2:
         return False
-    model = RandomForestClassifier(n_estimators=100, max_depth=5, random_state=42)
+    model = RandomForestClassifier(n_estimators=50, max_depth=4, random_state=42)
     model.fit(X, y)
-    model_path = INTRADAY_MODEL if mode == "intraday" else SWING_MODEL
-    joblib.dump(model, model_path)
+    joblib.dump(model, INTRADAY_MODEL if mode == "intraday" else SWING_MODEL)
     return True
 
 def predict_trade_prob(rvol, vwap_dist, rsi, atr_pct, mode="intraday"):
@@ -77,103 +77,114 @@ def predict_trade_prob(rvol, vwap_dist, rsi, atr_pct, mode="intraday"):
     return f"{prob}%", trap
 
 # ==============================================================================
-# INDICATORS CALCULATOR
+# VECTORIZED INDICATOR COMPUTATION (PRE-CALCULATED ONCE)
 # ==============================================================================
-def calculate_indicators(df: pd.DataFrame, cfg: dict):
-    close, high, low, vol = df['Close'], df['High'], df['Low'], df['Volume']
-    tr = pd.concat([high - low, (high - close.shift(1)).abs(), (low - close.shift(1)).abs()], axis=1).max(axis=1)
-    atr = float(tr.tail(14).mean())
-    if atr <= 0 or np.isnan(atr): atr = 1.0
-    ema = float(close.ewm(span=cfg.get("ema_span", 20)).mean().iloc[-1])
+def attach_vectorized_indicators(df: pd.DataFrame, ema_span: int):
+    d = df.copy()
+    close, high, low, vol = d['Close'], d['High'], d['Low'], d['Volume']
     
+    # ATR
+    tr = pd.concat([high - low, (high - close.shift(1)).abs(), (low - close.shift(1)).abs()], axis=1).max(axis=1)
+    d['ATR'] = tr.rolling(14).mean().fillna(1.0)
+    
+    # EMA
+    d['EMA'] = close.ewm(span=ema_span, adjust=False).mean()
+    
+    # RSI
     delta = close.diff()
     gain = (delta.where(delta > 0, 0)).rolling(14).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
     rs = gain / loss.replace(0, 1e-9)
-    rsi = float((100 - (100 / (1 + rs))).dropna().iloc[-1]) if not rs.empty else 50.0
+    d['RSI'] = (100 - (100 / (1 + rs))).fillna(50.0)
     
-    today_date = close.index[-1].date() if hasattr(close.index[-1], 'date') else None
-    if today_date and len(df[df.index.date == today_date]) > 0:
-        today_df = df[df.index.date == today_date]
-        vwap = float((today_df['Volume'] * (today_df['High'] + today_df['Low'] + today_df['Close']) / 3).sum() / today_df['Volume'].sum())
-    else:
-        vwap = float((vol * (high + low + close) / 3).cumsum().iloc[-1] / vol.cumsum().iloc[-1])
-        
-    v20 = float(vol.tail(20).mean())
-    rvol = float(vol.iloc[-1] / v20) if v20 > 0 else 1.0
-    c_live = float(close.iloc[-1])
-    vwap_dist = abs(c_live - vwap) / vwap * 100
-    atr_pct = (atr / c_live) * 100
+    # Cumulative VWAP
+    tp = (high + low + close) / 3
+    d['VWAP'] = (tp * vol).cumsum() / vol.cumsum().replace(0, 1e-9)
     
-    return {"c_live": c_live, "atr": atr, "ema": ema, "vwap": vwap, "rsi": rsi, "rvol": rvol, "vwap_dist": vwap_dist, "atr_pct": atr_pct}
+    # RVOL & Percentages
+    v20 = vol.rolling(20).mean().replace(0, 1e-9)
+    d['RVOL'] = (vol / v20).fillna(1.0)
+    d['VWAP_Dist_Pct'] = (close - d['VWAP']).abs() / d['VWAP'] * 100
+    d['ATR_Pct'] = (d['ATR'] / close) * 100
+    
+    return d
 
 # ==============================================================================
-# LIVE SCANNER ENGINES (USES LOADED PERMANENT CONFIGS)
+# LIVE SCANNER ANALYZERS
 # ==============================================================================
 def run_smc_analysis(df: pd.DataFrame, timeframe_label="INTRADAY", mode="intraday"):
     if df.empty or len(df) < 30: return None
     cfg = load_config(mode)
-    ind = calculate_indicators(df, cfg)
+    d = attach_vectorized_indicators(df, cfg.get("ema_span", 20))
+    last = d.iloc[-1]
     
-    is_bull = ind["c_live"] > ind["vwap"] and ind["c_live"] > ind["ema"] and ind["rvol"] >= cfg.get("min_rvol", 1.0)
-    is_bear = ind["c_live"] < ind["vwap"] and ind["c_live"] < ind["ema"] and ind["rvol"] >= cfg.get("min_rvol", 1.0)
+    c_live, vwap, ema, rvol = last['Close'], last['VWAP'], last['EMA'], last['RVOL']
+    atr, atr_pct, rsi, vwap_dist = last['ATR'], last['ATR_Pct'], last['RSI'], last['VWAP_Dist_Pct']
+    
+    is_bull = c_live > vwap and c_live > ema and rvol >= cfg.get("min_rvol", 1.0)
+    is_bear = c_live < vwap and c_live < ema and rvol >= cfg.get("min_rvol", 1.0)
     if not (is_bull or is_bear): return None
     
     direction = "BULLISH" if is_bull else "BEARISH"
-    sl_dist = cfg.get("atr_mult", 1.2) * ind["atr"]
+    sl_dist = cfg.get("atr_mult", 1.2) * atr
     tp_dist = cfg.get("rr_ratio", 2.0) * sl_dist
-    sl = round(ind["c_live"] - sl_dist if is_bull else ind["c_live"] + sl_dist, 2)
-    tp = round(ind["c_live"] + tp_dist if is_bull else ind["c_live"] - tp_dist, 2)
+    sl = round(c_live - sl_dist if is_bull else c_live + sl_dist, 2)
+    tp = round(c_live + tp_dist if is_bull else c_live - tp_dist, 2)
     
-    win_prob, trap_risk = predict_trade_prob(ind["rvol"], ind["vwap_dist"], ind["rsi"], ind["atr_pct"], mode)
+    win_prob, trap_risk = predict_trade_prob(rvol, vwap_dist, rsi, atr_pct, mode)
     return {
         "Symbol": getattr(df, 'name', "STOCK"), "Timeframe": timeframe_label, "Direction": direction,
-        "Suggested Entry": round(ind["c_live"], 2), "Stop Loss": sl, "Target Price": tp,
-        "RVOL": round(ind["rvol"], 2), "RSI": round(ind["rsi"], 1), "AI Win Prob": win_prob, "Trap Risk": trap_risk, "Trade Action": "ACTIVE ENTRY"
+        "Suggested Entry": round(c_live, 2), "Stop Loss": sl, "Target Price": tp,
+        "RVOL": round(rvol, 2), "RSI": round(rsi, 1), "AI Win Prob": win_prob, "Trap Risk": trap_risk, "Trade Action": "ACTIVE ENTRY"
     }
 
 def run_momentum_analysis(df: pd.DataFrame, mode="intraday"):
     if df.empty or len(df) < 35: return None
     cfg = load_config(mode)
-    ind = calculate_indicators(df, cfg)
+    d = attach_vectorized_indicators(df, cfg.get("ema_span", 20))
+    last = d.iloc[-1]
+    
     h20 = float(df['High'].tail(30).iloc[:-2].max())
     l20 = float(df['Low'].tail(30).iloc[:-2].min())
+    c_live, vwap, atr = last['Close'], last['VWAP'], last['ATR']
     
-    is_bull = ind["c_live"] > ind["vwap"] and ind["c_live"] >= h20
-    is_bear = ind["c_live"] < ind["vwap"] and ind["c_live"] <= l20
+    is_bull = c_live > vwap and c_live >= h20
+    is_bear = c_live < vwap and c_live <= l20
     if not (is_bull or is_bear): return None
     
-    entry = round(max(ind["vwap"], h20) if is_bull else min(ind["vwap"], l20), 2)
-    sl = round(entry - (cfg.get("atr_mult", 1.2) * ind["atr"]) if is_bull else entry + (cfg.get("atr_mult", 1.2) * ind["atr"]), 2)
-    tp = round(entry + (cfg.get("rr_ratio", 2.0) * cfg.get("atr_mult", 1.2) * ind["atr"]) if is_bull else entry - (cfg.get("rr_ratio", 2.0) * cfg.get("atr_mult", 1.2) * ind["atr"]), 2)
-    win_prob, trap_risk = predict_trade_prob(ind["rvol"], ind["vwap_dist"], ind["rsi"], ind["atr_pct"], mode)
+    entry = round(max(vwap, h20) if is_bull else min(vwap, l20), 2)
+    sl = round(entry - (cfg.get("atr_mult", 1.2) * atr) if is_bull else entry + (cfg.get("atr_mult", 1.2) * atr), 2)
+    tp = round(entry + (cfg.get("rr_ratio", 2.0) * cfg.get("atr_mult", 1.2) * atr) if is_bull else entry - (cfg.get("rr_ratio", 2.0) * cfg.get("atr_mult", 1.2) * atr), 2)
+    win_prob, trap_risk = predict_trade_prob(last['RVOL'], last['VWAP_Dist_Pct'], last['RSI'], last['ATR_Pct'], mode)
     
     return {
         "Symbol": getattr(df, 'name', "STOCK"), "Direction": "🔥 BULLISH MOMENTUM" if is_bull else "🩸 BEARISH MOMENTUM",
-        "Current Price": round(ind["c_live"], 2), "Suggested Entry": entry, "Stop Loss": sl, "Target Price": tp,
-        "RVOL": round(ind["rvol"], 2), "R/R Ratio": f"1 : {cfg.get('rr_ratio', 2.0)}", "AI Win Prob": win_prob, "Trap Risk": trap_risk
+        "Current Price": round(c_live, 2), "Suggested Entry": entry, "Stop Loss": sl, "Target Price": tp,
+        "RVOL": round(last['RVOL'], 2), "R/R Ratio": f"1 : {cfg.get('rr_ratio', 2.0)}", "AI Win Prob": win_prob, "Trap Risk": trap_risk
     }
 
 def run_meta_contrarian_analysis(df: pd.DataFrame, mode="intraday"):
     if df.empty or len(df) < 35: return None
     cfg = load_config(mode)
-    ind = calculate_indicators(df, cfg)
-    is_bull = ind["c_live"] > ind["vwap"]
-    is_bear = ind["c_live"] < ind["vwap"]
+    d = attach_vectorized_indicators(df, cfg.get("ema_span", 20))
+    last = d.iloc[-1]
+    
+    c_live, vwap = last['Close'], last['VWAP']
+    is_bull, is_bear = c_live > vwap, c_live < vwap
     if not (is_bull or is_bear): return None
     
     score = 75.0
     flags = []
-    if ind["vwap_dist"] > 1.8: score -= 8; flags.append("⚠️ Overstretched VWAP")
-    elif ind["vwap_dist"] < 0.4: score += 5; flags.append("🟢 VWAP Anchor Pullback")
-    if ind["rsi"] > 70: score -= 6; flags.append("⚠️ RSI Overbought")
-    elif ind["rsi"] < 30: score -= 6; flags.append("⚠️ RSI Oversold")
+    if last['VWAP_Dist_Pct'] > 1.8: score -= 8; flags.append("⚠️ Overstretched VWAP")
+    elif last['VWAP_Dist_Pct'] < 0.4: score += 5; flags.append("🟢 VWAP Anchor Pullback")
+    if last['RSI'] > 70: score -= 6; flags.append("⚠️ RSI Overbought")
+    elif last['RSI'] < 30: score -= 6; flags.append("⚠️ RSI Oversold")
     
-    win_prob, _ = predict_trade_prob(ind["rvol"], ind["vwap_dist"], ind["rsi"], ind["atr_pct"], mode)
+    win_prob, _ = predict_trade_prob(last['RVOL'], last['VWAP_Dist_Pct'], last['RSI'], last['ATR_Pct'], mode)
     return {
         "Symbol": getattr(df, 'name', "STOCK"), "Direction": "BULLISH" if is_bull else "BEARISH",
         "Re-Ranked Score": round(score, 1), "Crowd Diagnostics": " | ".join(flags) if flags else "Optimal Setup",
-        "Current Price": round(ind["c_live"], 2), "RVOL": round(ind["rvol"], 2), "RSI": round(ind["rsi"], 1), "AI Win Prob": win_prob
+        "Current Price": round(c_live, 2), "RVOL": round(last['RVOL'], 2), "RSI": round(last['RSI'], 1), "AI Win Prob": win_prob
     }
 
 def run_master_confluence(symbols: list) -> pd.DataFrame:
@@ -194,66 +205,74 @@ def run_master_confluence(symbols: list) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 # ==============================================================================
-# FAST IN-MEMORY BACKTESTER & STRATEGY DISCOVERY ENGINE
+# ULTRA-FAST VECTORIZED STRATEGY DISCOVERY ENGINE
 # ==============================================================================
-def run_parameterized_backtest_cached(data_dict: dict, cfg: dict):
-    all_trades = []
-    for sym, df in data_dict.items():
-        if df.empty or len(df) < 40: continue
-        close, high, low = df['Close'], df['High'], df['Low']
-        in_trade, current_trade = False, None
+def run_fast_backtest(df: pd.DataFrame, sym: str, cfg: dict):
+    trades = []
+    closes = df['Close'].values
+    highs = df['High'].values
+    lows = df['Low'].values
+    vwaps = df['VWAP'].values
+    emas = df['EMA'].values
+    rvols = df['RVOL'].values
+    atrs = df['ATR'].values
+    vwap_dists = df['VWAP_Dist_Pct'].values
+    rsis = df['RSI'].values
+    atr_pcts = df['ATR_Pct'].values
+    times = df.index
+    
+    in_trade = False
+    trade = {}
+    
+    for i in range(35, len(df)):
+        c_p, h_p, l_p = closes[i], highs[i], lows[i]
         
-        for i in range(35, len(df)):
-            curr_time = df.index[i]
-            h_p, l_p, c_p = float(high.iloc[i]), float(low.iloc[i]), float(close.iloc[i])
-            if in_trade and current_trade:
-                if current_trade["Direction"] == "BULLISH":
-                    if h_p >= current_trade["Target Price"]:
-                        current_trade.update({"Exit Price": current_trade["Target Price"], "Exit Time": curr_time, "Result": "WIN 🎯", "PnL %": round(((current_trade["Target Price"] - current_trade["Entry Price"]) / current_trade["Entry Price"]) * 100, 2)})
-                        all_trades.append(current_trade); in_trade, current_trade = False, None; continue
-                    elif l_p <= current_trade["Stop Loss"]:
-                        current_trade.update({"Exit Price": current_trade["Stop Loss"], "Exit Time": curr_time, "Result": "LOSS 🛑", "PnL %": round(((current_trade["Stop Loss"] - current_trade["Entry Price"]) / current_trade["Entry Price"]) * 100, 2)})
-                        all_trades.append(current_trade); in_trade, current_trade = False, None; continue
-                elif current_trade["Direction"] == "BEARISH":
-                    if l_p <= current_trade["Target Price"]:
-                        current_trade.update({"Exit Price": current_trade["Target Price"], "Exit Time": curr_time, "Result": "WIN 🎯", "PnL %": round(((current_trade["Entry Price"] - current_trade["Target Price"]) / current_trade["Entry Price"]) * 100, 2)})
-                        all_trades.append(current_trade); in_trade, current_trade = False, None; continue
-                    elif h_p >= current_trade["Stop Loss"]:
-                        current_trade.update({"Exit Price": current_trade["Stop Loss"], "Exit Time": curr_time, "Result": "LOSS 🛑", "PnL %": round(((current_trade["Entry Price"] - current_trade["Stop Loss"]) / current_trade["Entry Price"]) * 100, 2)})
-                        all_trades.append(current_trade); in_trade, current_trade = False, None; continue
+        if in_trade:
+            if trade["Direction"] == "BULLISH":
+                if h_p >= trade["Target Price"]:
+                    trade.update({"Exit Price": trade["Target Price"], "Exit Time": times[i], "Result": "WIN 🎯", "PnL %": round(((trade["Target Price"] - trade["Entry Price"]) / trade["Entry Price"]) * 100, 2)})
+                    trades.append(trade); in_trade = False; continue
+                elif l_p <= trade["Stop Loss"]:
+                    trade.update({"Exit Price": trade["Stop Loss"], "Exit Time": times[i], "Result": "LOSS 🛑", "PnL %": round(((trade["Stop Loss"] - trade["Entry Price"]) / trade["Entry Price"]) * 100, 2)})
+                    trades.append(trade); in_trade = False; continue
+            elif trade["Direction"] == "BEARISH":
+                if l_p <= trade["Target Price"]:
+                    trade.update({"Exit Price": trade["Target Price"], "Exit Time": times[i], "Result": "WIN 🎯", "PnL %": round(((trade["Entry Price"] - trade["Target Price"]) / trade["Entry Price"]) * 100, 2)})
+                    trades.append(trade); in_trade = False; continue
+                elif h_p >= trade["Stop Loss"]:
+                    trade.update({"Exit Price": trade["Stop Loss"], "Exit Time": times[i], "Result": "LOSS 🛑", "PnL %": round(((trade["Entry Price"] - trade["Stop Loss"]) / trade["Entry Price"]) * 100, 2)})
+                    trades.append(trade); in_trade = False; continue
 
-            if not in_trade:
-                sub_df = df.iloc[:i+1]
-                ind = calculate_indicators(sub_df, cfg)
-                is_bull = c_p > ind["vwap"] and c_p > ind["ema"] and ind["rvol"] >= cfg["min_rvol"]
-                is_bear = c_p < ind["vwap"] and c_p < ind["ema"] and ind["rvol"] >= cfg["min_rvol"]
-                if is_bull or is_bear:
-                    direction = "BULLISH" if is_bull else "BEARISH"
-                    sl_dist = cfg["atr_mult"] * ind["atr"]
-                    tp_dist = cfg["rr_ratio"] * sl_dist
-                    sl = round(c_p - sl_dist if is_bull else c_p + sl_dist, 2)
-                    tp = round(c_p + tp_dist if is_bull else c_p - tp_dist, 2)
-                    in_trade = True
-                    current_trade = {
-                        "Symbol": sym, "Direction": direction, "Entry Time": curr_time, "Entry Price": c_p,
-                        "Stop Loss": sl, "Target Price": tp, "RVOL": round(ind["rvol"], 2),
-                        "VWAP_Dist_Pct": round(ind["vwap_dist"], 2), "RSI": round(ind["rsi"], 1), "ATR_Pct": round(ind["atr_pct"], 2)
-                    }
-    return pd.DataFrame(all_trades)
+        if not in_trade:
+            is_bull = c_p > vwaps[i] and c_p > emas[i] and rvols[i] >= cfg["min_rvol"]
+            is_bear = c_p < vwaps[i] and c_p < emas[i] and rvols[i] >= cfg["min_rvol"]
+            if is_bull or is_bear:
+                direction = "BULLISH" if is_bull else "BEARISH"
+                sl_dist = cfg["atr_mult"] * atrs[i]
+                tp_dist = cfg["rr_ratio"] * sl_dist
+                sl = round(c_p - sl_dist if is_bull else c_p + sl_dist, 2)
+                tp = round(c_p + tp_dist if is_bull else c_p - tp_dist, 2)
+                in_trade = True
+                trade = {
+                    "Symbol": sym, "Direction": direction, "Entry Time": times[i], "Entry Price": c_p,
+                    "Stop Loss": sl, "Target Price": tp, "RVOL": round(rvols[i], 2),
+                    "VWAP_Dist_Pct": round(vwap_dists[i], 2), "RSI": round(rsis[i], 1), "ATR_Pct": round(atr_pcts[i], 2)
+                }
+    return trades
 
 def discover_best_strategies(tickers: list, mode="intraday"):
-    period = "60d" if mode == "intraday" else "1y"
+    period = "1mo" if mode == "intraday" else "1y"
     interval = "5m" if mode == "intraday" else "1d"
     
-    # 1. Pre-fetch historical data ONCE in-memory to prevent yfinance rate limits
-    st.info("Pre-loading historical data into memory...")
-    data_dict = {}
+    st.info("Pre-loading historical market data...")
+    raw_data = {}
     for sym in tickers:
         df = fetch_data(sym, period=period, interval=interval)
         if not df.empty and len(df) >= 40:
-            data_dict[sym] = df
+            raw_data[sym] = df
 
-    if not data_dict:
+    if not raw_data:
+        st.error("Unable to download data from Yahoo Finance. Please check internet connection or retry shortly.")
         return None, pd.DataFrame()
 
     param_grid = {
@@ -264,14 +283,23 @@ def discover_best_strategies(tickers: list, mode="intraday"):
     }
     keys, values = zip(*param_grid.items())
     combinations = [dict(zip(keys, v)) for v in itertools.product(*values)]
-    best_cfg, best_win_rate, best_trades_df = None, 0.0, pd.DataFrame()
     
-    # 2. Iterate offline over pre-fetched data
+    # Pre-calculate indicator vectors for each EMA span
+    st.info("Pre-calculating indicator vectors...")
+    prepared_data = {ema: {sym: attach_vectorized_indicators(df, ema) for sym, df in raw_data.items()} for ema in [10, 20, 50]}
+    
+    best_cfg, best_win_rate, best_trades_df = None, 0.0, pd.DataFrame()
     progress = st.progress(0.0)
+    
     for idx, cfg in enumerate(combinations):
-        trades_df = run_parameterized_backtest_cached(data_dict, cfg)
+        all_trades = []
+        target_dict = prepared_data[cfg["ema_span"]]
+        for sym, df in target_dict.items():
+            all_trades.extend(run_fast_backtest(df, sym, cfg))
+            
         progress.progress((idx + 1) / len(combinations))
-        if len(trades_df) < 15: continue
+        if len(all_trades) < 10: continue
+        trades_df = pd.DataFrame(all_trades)
         win_rate = (sum(trades_df["Result"] == "WIN 🎯") / len(trades_df)) * 100
         if win_rate > best_win_rate:
             best_win_rate = win_rate
@@ -286,7 +314,7 @@ def discover_best_strategies(tickers: list, mode="intraday"):
     return best_cfg, best_trades_df
 
 # ==============================================================================
-# UI NAVIGATION & CONTROLS
+# STREAMLIT UI & DASHBOARD
 # ==============================================================================
 st.sidebar.title("NQIRP Quant Engine")
 universe = st.sidebar.selectbox("Select Watchlist", ["Default Watchlist (7 Stocks)", "NIFTY 50 Expanded", "Custom Tickers"])
@@ -354,7 +382,7 @@ elif page == "🧪 AI Strategy Discovery & Backtester":
     st.title("🧪 Fast In-Memory Strategy Discovery Engine")
     st.caption("Runs fast in-memory strategy discovery, saves optimal parameters to JSON, and trains ML models.")
     
-    tf_mode = st.radio("Select Target Timeframe Engine to Optimize", ["Intraday (5m / 60-Day Lookback)", "Swing Daily (1D / 1-Year Lookback)"])
+    tf_mode = st.radio("Select Target Timeframe Engine to Optimize", ["Intraday (5m / 1-Month Lookback)", "Swing Daily (1D / 1-Year Lookback)"])
     target_mode = "intraday" if "Intraday" in tf_mode else "swing"
     
     if st.button(f"🚀 Run Strategy Optimization ({target_mode.upper()})", type="primary"):
