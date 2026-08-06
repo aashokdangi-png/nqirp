@@ -175,9 +175,9 @@ def detect_smc_and_patterns(df: pd.DataFrame) -> dict:
     return {"SMC_Structure": smc_struct, "FVG_Status": fvg, "Order_Block": ob, "Pattern": pattern}
 
 # ==============================================================================
-# LIVE SCANNER ANALYZERS (UPDATED WITH EXPLICIT SMC & PATTERN COLUMNS)
+# LIVE SCANNER ANALYZERS (EXPLICIT SYMBOL PASSING)
 # ==============================================================================
-def run_smc_analysis(df: pd.DataFrame, timeframe_label="INTRADAY", mode="intraday"):
+def run_smc_analysis(df: pd.DataFrame, symbol: str, timeframe_label="INTRADAY", mode="intraday"):
     if df.empty or len(df) < 30: return None
     cfg = load_config(mode)
     d = attach_vectorized_indicators(df, cfg.get("ema_span", 20))
@@ -199,14 +199,14 @@ def run_smc_analysis(df: pd.DataFrame, timeframe_label="INTRADAY", mode="intrada
     
     win_prob, trap_risk = predict_trade_prob(rvol, vwap_dist, rsi, atr_pct, mode)
     return {
-        "Symbol": getattr(df, 'name', "STOCK"), "Timeframe": timeframe_label, "Direction": direction,
+        "Symbol": symbol, "Timeframe": timeframe_label, "Direction": direction,
         "Suggested Entry": round(c_live, 2), "Stop Loss": sl, "Target Price": tp,
         "SMC Structure": smc_patterns["SMC_Structure"], "Order Block": smc_patterns["Order_Block"],
         "FVG Status": smc_patterns["FVG_Status"], "Chart Pattern": smc_patterns["Pattern"],
         "RVOL": round(rvol, 2), "RSI": round(rsi, 1), "AI Win Prob": win_prob, "Trap Risk": trap_risk
     }
 
-def run_momentum_analysis(df: pd.DataFrame, mode="intraday"):
+def run_momentum_analysis(df: pd.DataFrame, symbol: str, mode="intraday"):
     if df.empty or len(df) < 35: return None
     cfg = load_config(mode)
     d = attach_vectorized_indicators(df, cfg.get("ema_span", 20))
@@ -227,13 +227,13 @@ def run_momentum_analysis(df: pd.DataFrame, mode="intraday"):
     win_prob, trap_risk = predict_trade_prob(last['RVOL'], last['VWAP_Dist_Pct'], last['RSI'], last['ATR_Pct'], mode)
     
     return {
-        "Symbol": getattr(df, 'name', "STOCK"), "Direction": "🔥 BULLISH MOMENTUM" if is_bull else "🩸 BEARISH MOMENTUM",
+        "Symbol": symbol, "Direction": "🔥 BULLISH MOMENTUM" if is_bull else "🩸 BEARISH MOMENTUM",
         "Current Price": round(c_live, 2), "Suggested Entry": entry, "Stop Loss": sl, "Target Price": tp,
         "SMC Structure": smc_patterns["SMC_Structure"], "Chart Pattern": smc_patterns["Pattern"],
         "RVOL": round(last['RVOL'], 2), "R/R Ratio": f"1 : {cfg.get('rr_ratio', 2.0)}", "AI Win Prob": win_prob, "Trap Risk": trap_risk
     }
 
-def run_meta_contrarian_analysis(df: pd.DataFrame, mode="intraday"):
+def run_meta_contrarian_analysis(df: pd.DataFrame, symbol: str, mode="intraday"):
     if df.empty or len(df) < 35: return None
     cfg = load_config(mode)
     d = attach_vectorized_indicators(df, cfg.get("ema_span", 20))
@@ -253,7 +253,7 @@ def run_meta_contrarian_analysis(df: pd.DataFrame, mode="intraday"):
     
     win_prob, _ = predict_trade_prob(last['RVOL'], last['VWAP_Dist_Pct'], last['RSI'], last['ATR_Pct'], mode)
     return {
-        "Symbol": getattr(df, 'name', "STOCK"), "Direction": "BULLISH" if is_bull else "BEARISH",
+        "Symbol": symbol, "Direction": "BULLISH" if is_bull else "BEARISH",
         "Re-Ranked Score": round(score, 1), "Crowd Diagnostics": " | ".join(flags) if flags else "Optimal Setup",
         "SMC Structure": smc_patterns["SMC_Structure"], "Chart Pattern": smc_patterns["Pattern"],
         "Current Price": round(c_live, 2), "RVOL": round(last['RVOL'], 2), "RSI": round(last['RSI'], 1), "AI Win Prob": win_prob
@@ -264,10 +264,9 @@ def run_master_confluence(symbols: list) -> pd.DataFrame:
     for sym in symbols:
         df_5m = fetch_data(sym, period="5d", interval="5m")
         if df_5m.empty: continue
-        df_5m.name = sym
-        smc = run_smc_analysis(df_5m, timeframe_label="INTRADAY", mode="intraday")
-        mom = run_momentum_analysis(df_5m, mode="intraday")
-        mc = run_meta_contrarian_analysis(df_5m, mode="intraday")
+        smc = run_smc_analysis(df_5m, sym, timeframe_label="INTRADAY", mode="intraday")
+        mom = run_momentum_analysis(df_5m, sym, mode="intraday")
+        mc = run_meta_contrarian_analysis(df_5m, sym, mode="intraday")
         if smc and mom and mc:
             rows.append({
                 "Symbol": sym, "Grade": "💎 TRIPLE ENGINE GEM", "Direction": smc["Direction"],
@@ -419,37 +418,59 @@ if page == "⚡ Multi-Tab Live Scanner":
                 res = run_master_confluence(symbols)
                 st.dataframe(res, use_container_width=True) if not res.empty else st.info("No confluences found currently.")
                 
+ with tab_master:
+        st.subheader("🌟 Unified Master Confluence Dashboard")
+        if st.button("🌟 Run Unified Master Scan", type="primary"):
+            with st.spinner("Executing triple-engine scan on 5m data..."):
+                res = run_master_confluence(symbols)
+                if not res.empty:
+                    st.dataframe(res, use_container_width=True)
+                else:
+                    st.info("No confluences found currently.")
+                
     with tab_intraday:
         st.subheader("⚡ Intraday SMC Scanner Engine (5-Minute Timeframe)")
         if st.button("⚡ Run Intraday Scan", type="primary"):
             with st.spinner("Scanning intraday 5m bars using saved intraday_config.json..."):
-                results = [run_smc_analysis(fetch_data(s, "5d", "5m"), timeframe_label="5M INTRADAY", mode="intraday") for s in symbols]
+                results = [run_smc_analysis(fetch_data(s, "5d", "5m"), s, timeframe_label="5M INTRADAY", mode="intraday") for s in symbols]
                 df_res = pd.DataFrame([r for r in results if r])
-                st.dataframe(df_res, use_container_width=True) if not df_res.empty else st.info("No intraday setups found.")
+                if not df_res.empty:
+                    st.dataframe(df_res, use_container_width=True)
+                else:
+                    st.info("No intraday setups found.")
 
     with tab_momentum:
         st.subheader("🚀 Momentum Leaders Engine (5-Minute Timeframe)")
         if st.button("🚀 Run Momentum Scan", type="primary"):
             with st.spinner("Scanning momentum leaders on 5m data..."):
-                results = [run_momentum_analysis(fetch_data(s, "5d", "5m"), mode="intraday") for s in symbols]
+                results = [run_momentum_analysis(fetch_data(s, "5d", "5m"), s, mode="intraday") for s in symbols]
                 df_res = pd.DataFrame([r for r in results if r])
-                st.dataframe(df_res, use_container_width=True) if not df_res.empty else st.info("No momentum leaders found.")
+                if not df_res.empty:
+                    st.dataframe(df_res, use_container_width=True)
+                else:
+                    st.info("No momentum leaders found.")
 
     with tab_swing:
         st.subheader("📈 Daily Swing Signals Engine (1D Daily Timeframe)")
         if st.button("📈 Run Daily Swing Scan", type="primary"):
             with st.spinner("Scanning 1-Year Daily candles using saved swing_config.json..."):
-                results = [run_smc_analysis(fetch_data(s, "1y", "1d"), timeframe_label="1D DAILY SWING", mode="swing") for s in symbols]
+                results = [run_smc_analysis(fetch_data(s, "1y", "1d"), s, timeframe_label="1D DAILY SWING", mode="swing") for s in symbols]
                 df_res = pd.DataFrame([r for r in results if r])
-                st.dataframe(df_res, use_container_width=True) if not df_res.empty else st.info("No swing setups found.")
+                if not df_res.empty:
+                    st.dataframe(df_res, use_container_width=True)
+                else:
+                    st.info("No swing setups found.")
 
     with tab_contrarian:
         st.subheader("🧠 Meta-Contrarian Crowd Exhaustion Engine")
         if st.button("🧠 Run Meta-Contrarian Scan", type="primary"):
             with st.spinner("Scanning crowd traps and overextension..."):
-                results = [run_meta_contrarian_analysis(fetch_data(s, "5d", "5m"), mode="intraday") for s in symbols]
+                results = [run_meta_contrarian_analysis(fetch_data(s, "5d", "5m"), s, mode="intraday") for s in symbols]
                 df_res = pd.DataFrame([r for r in results if r])
-                st.dataframe(df_res, use_container_width=True) if not df_res.empty else st.info("No crowd traps detected.")
+                if not df_res.empty:
+                    st.dataframe(df_res, use_container_width=True)
+                else:
+                    st.info("No crowd traps detected.")
 
 elif page == "🧪 AI Strategy Discovery & Backtester":
     st.title("🧪 Fast In-Memory Strategy Discovery Engine")
