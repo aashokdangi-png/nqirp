@@ -111,14 +111,8 @@ def fetch_upstox_live(symbol: str, interval: str = "5m") -> pd.DataFrame | None:
         instrument_key = get_upstox_instrument_key(symbol)
         encoded_key = urllib.parse.quote(instrument_key, safe="")
 
-        if interval in ["day", "1d", "daily"]:
-            to_date = datetime.now().strftime("%Y-%m-%d")
-            from_date = (datetime.now() - timedelta(days=365)).strftime("%Y-%m-%d")
-            url = f"https://api.upstox.com/v2/historical-candle/{encoded_key}/day/{to_date}/{from_date}"
-        else:
-            # Upstox v2 intraday strictly requires '1minute'
-            url = f"https://api.upstox.com/v2/historical-candle/intraday/{encoded_key}/1minute"
-
+        # Use Upstox Free LTP Quote API to get real-time price without interval errors
+        url = f"https://api.upstox.com/v2/market-quote/ltp?instrument_key={encoded_key}"
         headers = {
             "Accept": "application/json",
             "Authorization": f"Bearer {access_token}",
@@ -126,44 +120,18 @@ def fetch_upstox_live(symbol: str, interval: str = "5m") -> pd.DataFrame | None:
 
         res = requests.get(url, headers=headers, timeout=5)
         if res.status_code == 200:
-            raw_candles = res.json().get("data", {}).get("candles", [])
-            if raw_candles:
-                df = pd.DataFrame(
-                    raw_candles,
-                    columns=[
-                        "Datetime",
-                        "Open",
-                        "High",
-                        "Low",
-                        "Close",
-                        "Volume",
-                        "OI",
-                    ],
-                )
-                df["Datetime"] = pd.to_datetime(df["Datetime"])
-                df = df.sort_values("Datetime").reset_index(drop=True)
-                for col in ["Open", "High", "Low", "Close", "Volume"]:
-                    df[col] = pd.to_numeric(df[col], errors="coerce")
-                df = df[df["Volume"] > 0].reset_index(drop=True)
+            data = res.json().get("data", {})
+            # Upstox returns keys in format like NSE_EQ|INE...
+            quote_data = data.get(instrument_key, {})
+            last_price = quote_data.get("last_price")
 
-                # Resample 1m data to 5m locally for your quant engine
-                if interval == "5m" and not df.empty:
-                    df.set_index("Datetime", inplace=True)
-                    df_5m = (
-                        df.resample("5min")
-                        .agg({
-                            "Open": "first",
-                            "High": "max",
-                            "Low": "min",
-                            "Close": "last",
-                            "Volume": "sum",
-                        })
-                        .dropna()
-                        .reset_index()
-                    )
-                    return df_5m
-
-                return df
+            if last_price:
+                # Fetch base historical backtest structure from Yahoo Finance
+                df = fetch_historical_backtest_data(symbol, period="5d", interval=interval)
+                if not df.empty:
+                    # Inject the exact free live price from Upstox into the latest candle close
+                    df.loc[df.index[-1], "Close"] = round(float(last_price), 2)
+                    return df
     except Exception:
         pass
     return None
