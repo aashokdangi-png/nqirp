@@ -416,13 +416,6 @@ if page == "⚡ Multi-Tab Live Scanner":
         if st.button("🌟 Run Unified Master Scan", type="primary"):
             with st.spinner("Executing triple-engine scan on 5m data..."):
                 res = run_master_confluence(symbols)
-                st.dataframe(res, use_container_width=True) if not res.empty else st.info("No confluences found currently.")
-                
- with tab_master:
-        st.subheader("🌟 Unified Master Confluence Dashboard")
-        if st.button("🌟 Run Unified Master Scan", type="primary"):
-            with st.spinner("Executing triple-engine scan on 5m data..."):
-                res = run_master_confluence(symbols)
                 if not res.empty:
                     st.dataframe(res, use_container_width=True)
                 else:
