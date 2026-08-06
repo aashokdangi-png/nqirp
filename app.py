@@ -102,7 +102,8 @@ def get_upstox_instrument_key(symbol: str) -> str:
     return UPSTOX_ISIN_MAP.get(clean_sym, f"NSE_EQ|{clean_sym}")
 
 
-def fetch_upstox_live(symbol: str, interval: str = "5m") -> pd.DataFrame | None:
+def fetch_upstox_live(symbol: str, interval: str = "5m") -> float | None:
+    """Fetches strictly the free real-time Last Traded Price (LTP) from Upstox."""
     try:
         access_token = get_upstox_access_token()
         if not access_token:
@@ -111,7 +112,6 @@ def fetch_upstox_live(symbol: str, interval: str = "5m") -> pd.DataFrame | None:
         instrument_key = get_upstox_instrument_key(symbol)
         encoded_key = urllib.parse.quote(instrument_key, safe="")
 
-        # Use Upstox Free LTP Quote API to get real-time price without interval errors
         url = f"https://api.upstox.com/v2/market-quote/ltp?instrument_key={encoded_key}"
         headers = {
             "Accept": "application/json",
@@ -121,20 +121,24 @@ def fetch_upstox_live(symbol: str, interval: str = "5m") -> pd.DataFrame | None:
         res = requests.get(url, headers=headers, timeout=5)
         if res.status_code == 200:
             data = res.json().get("data", {})
-            # Upstox returns keys in format like NSE_EQ|INE...
             quote_data = data.get(instrument_key, {})
             last_price = quote_data.get("last_price")
-
             if last_price:
-                # Fetch base historical backtest structure from Yahoo Finance
-                df = fetch_historical_backtest_data(symbol, period="5d", interval=interval)
-                if not df.empty:
-                    # Inject the exact free live price from Upstox into the latest candle close
-                    df.loc[df.index[-1], "Close"] = round(float(last_price), 2)
-                    return df
+                return float(last_price)
     except Exception:
         pass
     return None
+
+@st.cache_data(ttl=10)
+def fetch_live_data(symbol: str, period: str = "5d", interval: str = "5m") -> pd.DataFrame:
+    """Loads clean historical data via Yahoo Finance and updates the latest candle with Upstox live LTP."""
+    df = fetch_historical_backtest_data(symbol, period=period, interval=interval)
+    if not df.empty:
+        live_price = fetch_upstox_live(symbol, interval=interval)
+        if live_price:
+            # Overwrite the latest candle close with the live Upstox price
+            df.loc[df.index[-1], "Close"] = round(live_price, 2)
+    return df
 
 
 @st.cache_data(ttl=10)
