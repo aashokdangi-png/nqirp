@@ -114,13 +114,13 @@ def fetch_upstox_live(symbol: str, interval: str = "5m") -> pd.DataFrame | None:
         instrument_key = urllib.parse.quote(raw_key, safe="")
         interval_str = str(interval).lower().strip()
 
-       # DAILY TIMEFRAME: Query Upstox Historical V3 (use singular 'day')
-       if "day" in interval_str or "1d" in interval_str:
-       to_date = datetime.now().strftime("%Y-%m-%d")
-       from_date = (datetime.now() - timedelta(days=120)).strftime("%Y-%m-%d")
-       url = f"https://api.upstox.com/v3/historical-candle/{instrument_key}/day/1/{to_date}/{from_date}"
+        # DAILY TIMEFRAME: Query Upstox Historical V3 (singular 'day')
+        if "day" in interval_str or "1d" in interval_str:
+            to_date = datetime.now().strftime("%Y-%m-%d")
+            from_date = (datetime.now() - timedelta(days=120)).strftime("%Y-%m-%d")
+            url = f"https://api.upstox.com/v3/historical-candle/{instrument_key}/day/1/{to_date}/{from_date}"
         else:
-            # INTRADAY TIMEFRAME: Query Upstox Intraday V3 endpoint (/minutes/5)
+            # INTRADAY TIMEFRAME: Query Upstox Intraday V3 endpoint
             digits = "".join(filter(str.isdigit, interval_str))
             int_val = int(digits) if digits else 5
             url = f"https://api.upstox.com/v3/historical-candle/intraday/{instrument_key}/minutes/{int_val}"
