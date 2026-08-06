@@ -559,11 +559,13 @@ def run_master_confluence(symbols: list) -> pd.DataFrame:
         df_5m = fetch_live_data(sym, period="5d", interval="5m")
         if df_5m.empty:
             continue
-        smc = run_smc_analysis(df_5m, sym, timeframe_label="INTRADAY", mode="intraday")
+        smc = run_smc_analysis(
+            df_5m, sym, timeframe_label="INTRADAY", mode="intraday"
+        )
         mom = run_momentum_analysis(df_5m, sym, mode="intraday")
         mc = run_meta_contrarian_analysis(df_5m, sym, mode="intraday")
-
         matches = [m for m in [smc, mom, mc] if m is not None]
+
         if len(matches) >= 2:
             base = smc or mom or mc
             grade = (
@@ -580,7 +582,15 @@ def run_master_confluence(symbols: list) -> pd.DataFrame:
                 "Symbol": sym,
                 "Grade": grade,
                 "Direction": base.get("Direction", "BULLISH"),
-                "Entry": base.get("Suggested Entry", base.get("Current Price", 0)),
+                "Current Price": base.get("Current Price", 0),
+                "Trigger Level": base.get("Trigger Level", 0),  # <--- ADDED
+                "Extension %": base.get("Extension %", "0.0%"),  # <--- ADDED
+                "Entry Status": base.get(
+                    "Entry Status", "🔥 VALID TRIGGER ENTRY"
+                ),  # <--- ADDED
+                "Entry": base.get(
+                    "Suggested Entry", base.get("Current Price", 0)
+                ),
                 "Stop Loss": base.get("Stop Loss", 0),
                 "Target Price": base.get("Target Price", 0),
                 "SMC Structure": base.get("SMC Structure", "NEUTRAL"),
@@ -596,7 +606,13 @@ def run_master_confluence(symbols: list) -> pd.DataFrame:
                 "Symbol": sym,
                 "Grade": "📊 SINGLE ENGINE SIGNAL",
                 "Direction": smc["Direction"],
-                "Entry": smc["Suggested Entry"],
+                "Current Price": smc.get("Current Price", 0),
+                "Trigger Level": smc.get("Trigger Level", 0),  # <--- ADDED
+                "Extension %": smc.get("Extension %", "0.0%"),  # <--- ADDED
+                "Entry Status": smc.get(
+                    "Entry Status", "🔥 VALID TRIGGER ENTRY"
+                ),  # <--- ADDED
+                "Entry": smc.get("Suggested Entry", smc.get("Current Price", 0)),
                 "Stop Loss": smc["Stop Loss"],
                 "Target Price": smc["Target Price"],
                 "SMC Structure": smc["SMC Structure"],
