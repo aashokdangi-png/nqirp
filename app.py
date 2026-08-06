@@ -918,3 +918,23 @@ elif page == "🧪 AI Strategy Discovery & Backtester":
                     "Could not find a high win-rate strategy permutation over the"
                     " specified sample size."
                 )
+# --- TEMPORARY DIAGNOSTIC BLOCK ---
+with st.sidebar.expander("🔍 Live Upstox API Diagnostic", expanded=True):
+    diag_token = get_upstox_access_token()
+    st.write(f"**Token Detected:** `{bool(diag_token)}`")
+    if diag_token:
+        # Test request directly to Upstox RELIANCE intraday endpoint
+        test_url = "https://api.upstox.com/v2/historical-candle/intraday/NSE_EQ%7CINE002A01018/5minute"
+        test_headers = {
+            "Accept": "application/json",
+            "Authorization": f"Bearer {diag_token}",
+        }
+        res = requests.get(test_url, headers=test_headers, timeout=5)
+        st.write(f"**HTTP Status Code:** `{res.status_code}`")
+        if res.status_code == 200:
+            candles = res.json().get("data", {}).get("candles", [])
+            st.write(f"**Latest Candle Time:** `{candles[0][0] if candles else 'No Data'}`")
+            st.write(f"**Latest Close Price:** `{candles[0][4] if candles else 'No Data'}`")
+        else:
+            st.error(f"**Upstox Raw Response:** {res.text}")
+# -----------------------------------
