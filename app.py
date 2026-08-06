@@ -87,16 +87,13 @@ def save_config(cfg: dict, mode="intraday"):
         json.dump(cfg, f, indent=4)
 
 
-def get_upstox_access_token() -> str | None:
-    """STEP 2 IMPLEMENTATION: Fetches token from secrets and strips whitespace."""
-    for key in ["token", "UPSTOX_ANALYTICS_TOKEN", "UPSTOX_ACCESS_TOKEN"]:
-        if key in st.secrets:
-            val = st.secrets[key]
-            if isinstance(val, str) and val.strip():
-                return val.strip().replace('"', "").replace("'", "")
-    return None
+# --- MISSING INSTRUMENT KEY RESOLVER ---
+def get_upstox_instrument_key(symbol: str) -> str:
+    clean_sym = symbol.upper().replace(".NS", "").replace("&", "_").strip()
+    return UPSTOX_ISIN_MAP.get(clean_sym, f"NSE_EQ|{clean_sym}")
 
 
+# --- UPDATED LIVE DATA FETCH (UPSTOX V3) ---
 def fetch_upstox_live(symbol: str, interval: str = "5m") -> pd.DataFrame | None:
     try:
         access_token = get_upstox_access_token()
@@ -105,13 +102,15 @@ def fetch_upstox_live(symbol: str, interval: str = "5m") -> pd.DataFrame | None:
 
         raw_key = get_upstox_instrument_key(symbol)
         instrument_key = urllib.parse.quote(raw_key, safe="")
-
-        # Normalize interval string to pure integer for Upstox V3 compliance
         interval_str = str(interval).lower().strip()
+
+        # DAILY TIMEFRAME: Query Upstox Historical V3 for multi-day history
         if "day" in interval_str or "1d" in interval_str:
-            url = f"https://api.upstox.com/v3/historical-candle/intraday/{instrument_key}/days/1"
+            to_date = datetime.now().strftime("%Y-%m-%d")
+            from_date = (datetime.now() - timedelta(days=120)).strftime("%Y-%m-%d")
+            url = f"https://api.upstox.com/v3/historical-candle/{instrument_key}/days/1/{to_date}/{from_date}"
         else:
-            # Extract digits strictly (e.g. '5m' -> 5, '30m' -> 30)
+            # INTRADAY TIMEFRAME: Query Upstox Intraday V3 endpoint (/minutes/5)
             digits = "".join(filter(str.isdigit, interval_str))
             int_val = int(digits) if digits else 5
             url = f"https://api.upstox.com/v3/historical-candle/intraday/{instrument_key}/minutes/{int_val}"
