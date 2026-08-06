@@ -116,8 +116,8 @@ def fetch_upstox_live(symbol: str, interval: str = "5m") -> pd.DataFrame | None:
             from_date = (datetime.now() - timedelta(days=365)).strftime("%Y-%m-%d")
             url = f"https://api.upstox.com/v2/historical-candle/{encoded_key}/day/{to_date}/{from_date}"
         else:
-            up_interval = "5minute" if interval == "5m" else interval
-            url = f"https://api.upstox.com/v2/historical-candle/intraday/{encoded_key}/{up_interval}"
+            # Query 1minute candles (valid Upstox v2 interval)
+            url = f"https://api.upstox.com/v2/historical-candle/intraday/{encoded_key}/1minute"
 
         headers = {
             "Accept": "application/json",
@@ -145,6 +145,24 @@ def fetch_upstox_live(symbol: str, interval: str = "5m") -> pd.DataFrame | None:
                 for col in ["Open", "High", "Low", "Close", "Volume"]:
                     df[col] = pd.to_numeric(df[col], errors="coerce")
                 df = df[df["Volume"] > 0].reset_index(drop=True)
+
+                # Resample 1m Upstox data into 5m candles for scanner calculations
+                if interval == "5m" and not df.empty:
+                    df.set_index("Datetime", inplace=True)
+                    df_5m = (
+                        df.resample("5min")
+                        .agg({
+                            "Open": "first",
+                            "High": "max",
+                            "Low": "min",
+                            "Close": "last",
+                            "Volume": "sum",
+                        })
+                        .dropna()
+                        .reset_index()
+                    )
+                    return df_5m
+
                 return df
     except Exception:
         pass
@@ -384,17 +402,41 @@ def run_smc_analysis(
     is_bear = c_live < vwap and c_live < ema and rvol >= cfg.get("min_rvol", 1.0)
     if not (is_bull or is_bear):
         return None
-    direction = "BULLISH" if is_bull else "BEARISH"
+   direction = "BULLISH" if is_bull else "BEARISH"
+    
+    # --- TRUE STRUCTURAL BREAKOUT / TRIGGER POINT ---
+    # Find the actual recent structural high/low breakout reference
+    recent_high = float(df["High"].tail(10).iloc[:-1].max())  # Prior breakout level
+    recent_low = float(df["Low"].tail(10).iloc[:-1].min())    # Prior breakdown level
+    
+    breakout_level = recent_high if is_bull else recent_low
+    
+    # Calculate how far current price has run past the exact trigger level
+    if is_bull:
+        extension_pct = ((c_live - breakout_level) / breakout_level) * 100
+    else:
+        extension_pct = ((breakout_level - c_live) / breakout_level) * 100
+
+    # If the stock has already moved > 1.5% past the trigger point, it's overextended
+    is_extended = extension_pct > 1.5
+    action_status = "⚠️ EXTENDED (CHASE RISK)" if is_extended else "🔥 VALID TRIGGER ENTRY"
+    # -----------------------------------------------
+
     sl_dist = cfg.get("atr_mult", 1.2) * atr
     tp_dist = cfg.get("rr_ratio", 2.0) * sl_dist
     sl = round(c_live - sl_dist if is_bull else c_live + sl_dist, 2)
     tp = round(c_live + tp_dist if is_bull else c_live - tp_dist, 2)
+    
     win_prob, trap_risk = predict_trade_prob(rvol, vwap_dist, rsi, atr_pct, mode)
+    
     return {
         "Symbol": symbol,
         "Timeframe": timeframe_label,
         "Direction": direction,
-        "Suggested Entry": round(c_live, 2),
+        "Current Price": round(c_live, 2),
+        "Trigger Level": round(breakout_level, 2),  # Exact structural price where breakout occurred
+        "Extension %": f"{round(extension_pct, 2)}%",  # How far it ran past the trigger
+        "Entry Status": action_status,             # Warns you if it's too late to enter
         "Stop Loss": sl,
         "Target Price": tp,
         "SMC Structure": smc_patterns["SMC_Structure"],
