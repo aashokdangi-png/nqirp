@@ -20,7 +20,6 @@ SWING_CFG = "swing_config.json"
 INTRADAY_MODEL = "intraday_ml_model.pkl"
 SWING_MODEL = "swing_ml_model.pkl"
 
-# UPSTOX V2 ISIN INSTRUMENT KEY MAP FOR ACCURATE API ACCESS
 UPSTOX_ISIN_MAP = {
     "RELIANCE": "NSE_EQ|INE002A01018",
     "TCS": "NSE_EQ|INE467B01029",
@@ -57,9 +56,6 @@ UPSTOX_ISIN_MAP = {
 }
 
 
-# ==============================================================================
-# CONFIGURATION MANAGEMENT HELPERS
-# ==============================================================================
 def load_config(mode="intraday") -> dict:
     filename = f"{mode}_config.json"
     if os.path.exists(filename):
@@ -91,18 +87,24 @@ def save_config(cfg: dict, mode="intraday"):
         json.dump(cfg, f, indent=4)
 
 
-# ==============================================================================
-# HYBRID DATA ENGINE: UPSTOX V2 (LIVE SCANNING) + YAHOO FINANCE (HISTORICAL BACKTEST)
-# ==============================================================================
+def get_upstox_access_token() -> str | None:
+    """STEP 2 IMPLEMENTATION: Fetches token from secrets and strips whitespace."""
+    for key in ["token", "UPSTOX_ANALYTICS_TOKEN", "UPSTOX_ACCESS_TOKEN"]:
+        if key in st.secrets:
+            val = st.secrets[key]
+            if isinstance(val, str) and val.strip():
+                return val.strip().replace('"', "").replace("'", "")
+    return None
+
+
 def get_upstox_instrument_key(symbol: str) -> str:
     clean_sym = symbol.replace(".NS", "").upper().strip()
     return UPSTOX_ISIN_MAP.get(clean_sym, f"NSE_EQ|{clean_sym}")
 
 
 def fetch_upstox_live(symbol: str, interval: str = "5m") -> pd.DataFrame | None:
-    """Fetches zero-delay live candles directly from Upstox API v2 endpoints."""
     try:
-        access_token = st.secrets.get("UPSTOX_ACCESS_TOKEN", None)
+        access_token = get_upstox_access_token()
         if not access_token:
             return None
 
@@ -142,6 +144,7 @@ def fetch_upstox_live(symbol: str, interval: str = "5m") -> pd.DataFrame | None:
                 df = df.sort_values("Datetime").reset_index(drop=True)
                 for col in ["Open", "High", "Low", "Close", "Volume"]:
                     df[col] = pd.to_numeric(df[col], errors="coerce")
+                df = df[df["Volume"] > 0].reset_index(drop=True)
                 return df
     except Exception:
         pass
@@ -152,7 +155,6 @@ def fetch_upstox_live(symbol: str, interval: str = "5m") -> pd.DataFrame | None:
 def fetch_live_data(
     symbol: str, period: str = "5d", interval: str = "5m"
 ) -> pd.DataFrame:
-    """Primary fetcher for LIVE SCANS: Tries Upstox API first; falls back to yfinance."""
     df_upstox = fetch_upstox_live(symbol, interval=interval)
     if df_upstox is not None and not df_upstox.empty and len(df_upstox) > 15:
         return df_upstox
@@ -163,7 +165,6 @@ def fetch_live_data(
 def fetch_historical_backtest_data(
     symbol: str, period: str = "1mo", interval: str = "5m"
 ) -> pd.DataFrame:
-    """Fetcher for HISTORICAL BACKTESTING via Yahoo Finance with auto_adjust=False."""
     formatted_symbol = symbol if (".NS" in symbol or "^" in symbol) else f"{symbol}.NS"
     try:
         ticker = yf.Ticker(formatted_symbol)
@@ -183,15 +184,21 @@ def fetch_historical_backtest_data(
             if all(col in df.columns for col in req_cols) and len(df) > 10:
                 for col in req_cols:
                     df[col] = pd.to_numeric(df[col], errors="coerce")
-                return df.dropna(subset=req_cols).reset_index(drop=True)
+                df = df[df["Volume"] > 0].reset_index(drop=True)
+
+                try:
+                    fast_ltp = ticker.fast_info.get("lastPrice", None)
+                    if fast_ltp and not np.isnan(fast_ltp):
+                        df.loc[df.index[-1], "Close"] = round(float(fast_ltp), 2)
+                except Exception:
+                    pass
+
+                return df
     except Exception:
         pass
     return pd.DataFrame()
 
 
-# ==============================================================================
-# MACHINE LEARNING ENGINE
-# ==============================================================================
 def train_ml_model(trades_df: pd.DataFrame, mode="intraday"):
     if trades_df.empty or len(trades_df) < 10:
         return False
@@ -228,9 +235,6 @@ def predict_trade_prob(rvol, vwap_dist, rsi, atr_pct, mode="intraday"):
     return f"{prob}%", trap
 
 
-# ==============================================================================
-# VECTORIZED INDICATOR COMPUTATION
-# ==============================================================================
 def attach_vectorized_indicators(df: pd.DataFrame, ema_span: int):
     d = df.copy()
     close, high, low, vol = d["Close"], d["High"], d["Low"], d["Volume"]
@@ -267,9 +271,6 @@ def attach_vectorized_indicators(df: pd.DataFrame, ema_span: int):
     return d
 
 
-# ==============================================================================
-# ADVANCED SMC & CHART PATTERN DETECTION ENGINE
-# ==============================================================================
 def detect_smc_and_patterns(df: pd.DataFrame) -> dict:
     if len(df) < 30:
         return {
@@ -358,9 +359,6 @@ def detect_smc_and_patterns(df: pd.DataFrame) -> dict:
     }
 
 
-# ==============================================================================
-# LIVE SCANNER ANALYZERS (EXPLICIT SYMBOL PASSING)
-# ==============================================================================
 def run_smc_analysis(
     df: pd.DataFrame, symbol: str, timeframe_label="INTRADAY", mode="intraday"
 ):
@@ -561,9 +559,6 @@ def run_master_confluence(symbols: list) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-# ==============================================================================
-# ULTRA-FAST VECTORIZED STRATEGY DISCOVERY ENGINE
-# ==============================================================================
 def run_fast_backtest(df: pd.DataFrame, sym: str, cfg: dict):
     trades = []
     closes = df["Close"].values
@@ -735,10 +730,16 @@ def discover_best_strategies(tickers: list, mode="intraday"):
     return best_cfg, best_trades_df
 
 
-# ==============================================================================
-# STREAMLIT UI & DASHBOARD
-# ==============================================================================
 st.sidebar.title("NQIRP Quant Engine")
+
+up_token = get_upstox_access_token()
+if up_token:
+    st.sidebar.success("🟢 Upstox Analytics API Connected")
+else:
+    st.sidebar.warning(
+        "⚠️ Upstox Token Missing from Secrets. Using Yahoo Finance Fallback."
+    )
+
 universe = st.sidebar.selectbox(
     "Select Watchlist",
     ["Default Watchlist (7 Stocks)", "NIFTY 50 Expanded", "Custom Tickers"],
@@ -812,7 +813,7 @@ if page == "⚡ Multi-Tab Live Scanner":
         st.subheader("⚡ Intraday SMC Scanner Engine (5-Minute Timeframe)")
         if st.button("⚡ Run Intraday Scan", type="primary"):
             with st.spinner(
-                "Scanning intraday 5m live Upstox candles using saved intraday_config.json..."
+                "Scanning intraday 5m live candles using saved intraday_config.json..."
             ):
                 results = [
                     run_smc_analysis(
@@ -832,7 +833,7 @@ if page == "⚡ Multi-Tab Live Scanner":
     with tab_momentum:
         st.subheader("🚀 Momentum Leaders Engine (5-Minute Timeframe)")
         if st.button("🚀 Run Momentum Scan", type="primary"):
-            with st.spinner("Scanning momentum leaders on live 5m Upstox candles..."):
+            with st.spinner("Scanning momentum leaders on live 5m candles..."):
                 results = [
                     run_momentum_analysis(
                         fetch_live_data(s, "5d", "5m"), s, mode="intraday"
@@ -849,7 +850,7 @@ if page == "⚡ Multi-Tab Live Scanner":
         st.subheader("📈 Daily Swing Signals Engine (1D Daily Timeframe)")
         if st.button("📈 Run Daily Swing Scan", type="primary"):
             with st.spinner(
-                "Scanning 1-Year Daily Upstox candles using saved swing_config.json..."
+                "Scanning 1-Year Daily candles using saved swing_config.json..."
             ):
                 results = [
                     run_smc_analysis(
