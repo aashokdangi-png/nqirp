@@ -2,6 +2,6 @@
     "ema_span": 50,
     "atr_mult": 1.5,
     "rr_ratio": 1.5,
-    "min_rvol": 1.5,
+    "min_rvol": 1,
     "win_rate": 40.85
 }
