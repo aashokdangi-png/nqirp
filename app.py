@@ -1,6 +1,7 @@
 import json
 import os
 import itertools
+import urllib.parse
 from datetime import datetime, timedelta
 import joblib
 import numpy as np
@@ -18,6 +19,42 @@ INTRADAY_CFG = "intraday_config.json"
 SWING_CFG = "swing_config.json"
 INTRADAY_MODEL = "intraday_ml_model.pkl"
 SWING_MODEL = "swing_ml_model.pkl"
+
+# UPSTOX V2 ISIN INSTRUMENT KEY MAP FOR ACCURATE API ACCESS
+UPSTOX_ISIN_MAP = {
+    "RELIANCE": "NSE_EQ|INE002A01018",
+    "TCS": "NSE_EQ|INE467B01029",
+    "INFY": "NSE_EQ|INE090A01021",
+    "HDFCBANK": "NSE_EQ|INE040A01034",
+    "ICICIBANK": "NSE_EQ|INE090A01013",
+    "REDINGTON": "NSE_EQ|INE891D01026",
+    "FIRSTSOURCE": "NSE_EQ|INE688F01017",
+    "FSL": "NSE_EQ|INE688F01017",
+    "SBIN": "NSE_EQ|INE062A01020",
+    "BHARTIARTL": "NSE_EQ|INE397D01024",
+    "ITC": "NSE_EQ|INE154A01025",
+    "LT": "NSE_EQ|INE018A01030",
+    "AXISBANK": "NSE_EQ|INE238A01034",
+    "KOTAKBANK": "NSE_EQ|INE237A01028",
+    "HINDUNILVR": "NSE_EQ|INE030A01027",
+    "BAJFINANCE": "NSE_EQ|INE296A01024",
+    "MARUTI": "NSE_EQ|INE585B01010",
+    "ASIANPAINT": "NSE_EQ|INE021A01026",
+    "HCLTECH": "NSE_EQ|INE860A01027",
+    "SUNPHARMA": "NSE_EQ|INE044A01036",
+    "TATAMOTORS": "NSE_EQ|INE155A01022",
+    "TATASTEEL": "NSE_EQ|INE081A01020",
+    "NTPC": "NSE_EQ|INE733E01010",
+    "POWERGRID": "NSE_EQ|INE752E01010",
+    "TITAN": "NSE_EQ|INE280A01028",
+    "ULTRACEMCO": "NSE_EQ|INE481G01011",
+    "WIPRO": "NSE_EQ|INE075A01022",
+    "ONGC": "NSE_EQ|INE213A01029",
+    "ADANIENT": "NSE_EQ|INE423A01024",
+    "ADANIPORTS": "NSE_EQ|INE742F01042",
+    "COALINDIA": "NSE_EQ|INE522F01014",
+    "M&M": "NSE_EQ|INE101A01026",
+}
 
 
 # ==============================================================================
@@ -55,17 +92,22 @@ def save_config(cfg: dict, mode="intraday"):
 
 
 # ==============================================================================
-# HYBRID DATA ENGINE: UPSTOX (LIVE SCANNING) + YAHOO FINANCE (HISTORICAL BACKTEST)
+# HYBRID DATA ENGINE: UPSTOX V2 (LIVE SCANNING) + YAHOO FINANCE (HISTORICAL BACKTEST)
 # ==============================================================================
+def get_upstox_instrument_key(symbol: str) -> str:
+    clean_sym = symbol.replace(".NS", "").upper().strip()
+    return UPSTOX_ISIN_MAP.get(clean_sym, f"NSE_EQ|{clean_sym}")
+
+
 def fetch_upstox_live(symbol: str, interval: str = "5m") -> pd.DataFrame | None:
-    """Fetches real-time market data directly from Upstox API v2 endpoints."""
+    """Fetches zero-delay live candles directly from Upstox API v2 endpoints."""
     try:
         access_token = st.secrets.get("UPSTOX_ACCESS_TOKEN", None)
         if not access_token:
             return None
 
-        clean_symbol = symbol.replace(".NS", "").upper()
-        encoded_key = f"NSE_EQ%7C{clean_symbol}"
+        instrument_key = get_upstox_instrument_key(symbol)
+        encoded_key = urllib.parse.quote(instrument_key, safe="")
 
         if interval in ["day", "1d", "daily"]:
             to_date = datetime.now().strftime("%Y-%m-%d")
@@ -115,18 +157,17 @@ def fetch_live_data(
     if df_upstox is not None and not df_upstox.empty and len(df_upstox) > 15:
         return df_upstox
 
-    # Fallback to Yahoo Finance if Upstox token is inactive or fails
     return fetch_historical_backtest_data(symbol, period=period, interval=interval)
 
 
 def fetch_historical_backtest_data(
     symbol: str, period: str = "1mo", interval: str = "5m"
 ) -> pd.DataFrame:
-    """Dedicated fetcher for HISTORICAL BACKTESTING via Yahoo Finance."""
+    """Fetcher for HISTORICAL BACKTESTING via Yahoo Finance with auto_adjust=False."""
     formatted_symbol = symbol if (".NS" in symbol or "^" in symbol) else f"{symbol}.NS"
     try:
         ticker = yf.Ticker(formatted_symbol)
-        df = ticker.history(period=period, interval=interval)
+        df = ticker.history(period=period, interval=interval, auto_adjust=False)
         if not df.empty:
             if isinstance(df.columns, pd.MultiIndex):
                 df.columns = df.columns.get_level_values(0)
@@ -402,7 +443,7 @@ def run_momentum_analysis(df: pd.DataFrame, symbol: str, mode="intraday"):
     return {
         "Symbol": symbol,
         "Direction": (
-            "🔥 BULLISH MOMENTUM" if is_bull else "🩸 BEARISH MOMENTUM"
+            "🔥 BULLISH MOMENTUM" if is_bull else "BEARISH MOMENTUM"
         ),
         "Current Price": round(c_live, 2),
         "Suggested Entry": entry,
