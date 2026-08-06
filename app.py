@@ -18,7 +18,7 @@ SWING_MODEL = "swing_ml_model.pkl"
 # ==============================================================================
 # DATA ENGINE (FAST CACHED FETCHING)
 # ==============================================================================
-@st.cache_data(ttl=600)
+@st.cache_data(ttl=15)
 def fetch_data(symbol: str, period: str = "1mo", interval: str = "5m") -> pd.DataFrame:
     try:
         ticker = f"{symbol}.NS" if not symbol.endswith(".NS") else symbol
