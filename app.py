@@ -77,31 +77,25 @@ def predict_trade_prob(rvol, vwap_dist, rsi, atr_pct, mode="intraday"):
     return f"{prob}%", trap
 
 # ==============================================================================
-# VECTORIZED INDICATOR COMPUTATION (PRE-CALCULATED ONCE)
+# VECTORIZED INDICATOR COMPUTATION
 # ==============================================================================
 def attach_vectorized_indicators(df: pd.DataFrame, ema_span: int):
     d = df.copy()
     close, high, low, vol = d['Close'], d['High'], d['Low'], d['Volume']
     
-    # ATR
     tr = pd.concat([high - low, (high - close.shift(1)).abs(), (low - close.shift(1)).abs()], axis=1).max(axis=1)
     d['ATR'] = tr.rolling(14).mean().fillna(1.0)
-    
-    # EMA
     d['EMA'] = close.ewm(span=ema_span, adjust=False).mean()
     
-    # RSI
     delta = close.diff()
     gain = (delta.where(delta > 0, 0)).rolling(14).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
     rs = gain / loss.replace(0, 1e-9)
     d['RSI'] = (100 - (100 / (1 + rs))).fillna(50.0)
     
-    # Cumulative VWAP
     tp = (high + low + close) / 3
     d['VWAP'] = (tp * vol).cumsum() / vol.cumsum().replace(0, 1e-9)
     
-    # RVOL & Percentages
     v20 = vol.rolling(20).mean().replace(0, 1e-9)
     d['RVOL'] = (vol / v20).fillna(1.0)
     d['VWAP_Dist_Pct'] = (close - d['VWAP']).abs() / d['VWAP'] * 100
@@ -110,12 +104,81 @@ def attach_vectorized_indicators(df: pd.DataFrame, ema_span: int):
     return d
 
 # ==============================================================================
-# LIVE SCANNER ANALYZERS
+# ADVANCED SMC & CHART PATTERN DETECTION ENGINE
+# ==============================================================================
+def detect_smc_and_patterns(df: pd.DataFrame) -> dict:
+    if len(df) < 30:
+        return {"SMC_Structure": "NEUTRAL", "FVG_Status": "NONE", "Order_Block": "NONE", "Pattern": "NONE"}
+    
+    highs, lows, closes = df['High'].values, df['Low'].values, df['Close'].values
+    n = len(df)
+    
+    # 1. Fractal Pivot Highs and Lows (5-bar window)
+    pivot_highs, pivot_lows = [], []
+    for i in range(2, n - 2):
+        if highs[i] > highs[i-1] and highs[i] > highs[i-2] and highs[i] > highs[i+1] and highs[i] > highs[i+2]:
+            pivot_highs.append((i, highs[i]))
+        if lows[i] < lows[i-1] and lows[i] < lows[i-2] and lows[i] < lows[i+1] and lows[i] < lows[i+2]:
+            pivot_lows.append((i, lows[i]))
+            
+    # 2. Fair Value Gap (FVG) Detection
+    fvg = "NONE"
+    if lows[-1] > highs[-3]:
+        fvg = "BULLISH FVG 🟢"
+    elif highs[-1] < lows[-3]:
+        fvg = "BEARISH FVG 🔴"
+        
+    # 3. Order Block (OB) Detection
+    ob = "NONE"
+    atr = df['ATR'].iloc[-1] if 'ATR' in df.columns else 1.0
+    if closes[-2] > closes[-3] and closes[-3] < closes[-4] and (closes[-1] - closes[-3]) > atr:
+        ob = "BULLISH OB 🟩"
+    elif closes[-2] < closes[-3] and closes[-3] > closes[-4] and (closes[-3] - closes[-1]) > atr:
+        ob = "BEARISH OB 🟥"
+
+    # 4. BOS & CHoCH Structural Detection
+    smc_struct = "NEUTRAL"
+    if len(pivot_highs) >= 2 and len(pivot_lows) >= 2:
+        last_ph, prev_ph = pivot_highs[-1][1], pivot_highs[-2][1]
+        last_pl, prev_pl = pivot_lows[-1][1], pivot_lows[-2][1]
+        curr_c = closes[-1]
+        
+        if curr_c > last_ph:
+            smc_struct = "BULLISH BOS 🚀" if last_pl > prev_pl else "BULLISH CHoCH 🔄"
+        elif curr_c < last_pl:
+            smc_struct = "BEARISH BOS 🩸" if last_ph < prev_ph else "BEARISH CHoCH 🔄"
+
+    # 5. Classic Pattern Recognition Engine
+    pattern = "NONE"
+    if len(pivot_highs) >= 2 and len(pivot_lows) >= 2:
+        ph1, ph2 = pivot_highs[-2][1], pivot_highs[-1][1]
+        pl1, pl2 = pivot_lows[-2][1], pivot_lows[-1][1]
+        
+        if abs(ph1 - ph2) / ph1 < 0.004:
+            pattern = "DOUBLE TOP 📉"
+        elif abs(pl1 - pl2) / pl1 < 0.004:
+            pattern = "DOUBLE BOTTOM 📈"
+        elif ph2 < ph1 and pl2 > pl1:
+            pattern = "SYMMETRICAL TRIANGLE 📐"
+        elif abs(ph1 - ph2) / ph1 < 0.004 and pl2 > pl1:
+            pattern = "ASCENDING TRIANGLE 📐"
+        elif ph2 < ph1 and abs(pl1 - pl2) / pl1 < 0.004:
+            pattern = "DESCENDING TRIANGLE 📐"
+        elif len(pivot_lows) >= 3:
+            pl0 = pivot_lows[-3][1]
+            if pl1 < pl0 and pl1 < pl2 and closes[-1] > pl2:
+                pattern = "CUP & HANDLE ☕"
+                
+    return {"SMC_Structure": smc_struct, "FVG_Status": fvg, "Order_Block": ob, "Pattern": pattern}
+
+# ==============================================================================
+# LIVE SCANNER ANALYZERS (UPDATED WITH EXPLICIT SMC & PATTERN COLUMNS)
 # ==============================================================================
 def run_smc_analysis(df: pd.DataFrame, timeframe_label="INTRADAY", mode="intraday"):
     if df.empty or len(df) < 30: return None
     cfg = load_config(mode)
     d = attach_vectorized_indicators(df, cfg.get("ema_span", 20))
+    smc_patterns = detect_smc_and_patterns(d)
     last = d.iloc[-1]
     
     c_live, vwap, ema, rvol = last['Close'], last['VWAP'], last['EMA'], last['RVOL']
@@ -135,13 +198,16 @@ def run_smc_analysis(df: pd.DataFrame, timeframe_label="INTRADAY", mode="intrada
     return {
         "Symbol": getattr(df, 'name', "STOCK"), "Timeframe": timeframe_label, "Direction": direction,
         "Suggested Entry": round(c_live, 2), "Stop Loss": sl, "Target Price": tp,
-        "RVOL": round(rvol, 2), "RSI": round(rsi, 1), "AI Win Prob": win_prob, "Trap Risk": trap_risk, "Trade Action": "ACTIVE ENTRY"
+        "SMC Structure": smc_patterns["SMC_Structure"], "Order Block": smc_patterns["Order_Block"],
+        "FVG Status": smc_patterns["FVG_Status"], "Chart Pattern": smc_patterns["Pattern"],
+        "RVOL": round(rvol, 2), "RSI": round(rsi, 1), "AI Win Prob": win_prob, "Trap Risk": trap_risk
     }
 
 def run_momentum_analysis(df: pd.DataFrame, mode="intraday"):
     if df.empty or len(df) < 35: return None
     cfg = load_config(mode)
     d = attach_vectorized_indicators(df, cfg.get("ema_span", 20))
+    smc_patterns = detect_smc_and_patterns(d)
     last = d.iloc[-1]
     
     h20 = float(df['High'].tail(30).iloc[:-2].max())
@@ -160,6 +226,7 @@ def run_momentum_analysis(df: pd.DataFrame, mode="intraday"):
     return {
         "Symbol": getattr(df, 'name', "STOCK"), "Direction": "🔥 BULLISH MOMENTUM" if is_bull else "🩸 BEARISH MOMENTUM",
         "Current Price": round(c_live, 2), "Suggested Entry": entry, "Stop Loss": sl, "Target Price": tp,
+        "SMC Structure": smc_patterns["SMC_Structure"], "Chart Pattern": smc_patterns["Pattern"],
         "RVOL": round(last['RVOL'], 2), "R/R Ratio": f"1 : {cfg.get('rr_ratio', 2.0)}", "AI Win Prob": win_prob, "Trap Risk": trap_risk
     }
 
@@ -167,6 +234,7 @@ def run_meta_contrarian_analysis(df: pd.DataFrame, mode="intraday"):
     if df.empty or len(df) < 35: return None
     cfg = load_config(mode)
     d = attach_vectorized_indicators(df, cfg.get("ema_span", 20))
+    smc_patterns = detect_smc_and_patterns(d)
     last = d.iloc[-1]
     
     c_live, vwap = last['Close'], last['VWAP']
@@ -184,6 +252,7 @@ def run_meta_contrarian_analysis(df: pd.DataFrame, mode="intraday"):
     return {
         "Symbol": getattr(df, 'name', "STOCK"), "Direction": "BULLISH" if is_bull else "BEARISH",
         "Re-Ranked Score": round(score, 1), "Crowd Diagnostics": " | ".join(flags) if flags else "Optimal Setup",
+        "SMC Structure": smc_patterns["SMC_Structure"], "Chart Pattern": smc_patterns["Pattern"],
         "Current Price": round(c_live, 2), "RVOL": round(last['RVOL'], 2), "RSI": round(last['RSI'], 1), "AI Win Prob": win_prob
     }
 
@@ -200,6 +269,8 @@ def run_master_confluence(symbols: list) -> pd.DataFrame:
             rows.append({
                 "Symbol": sym, "Grade": "💎 TRIPLE ENGINE GEM", "Direction": smc["Direction"],
                 "Entry": smc["Suggested Entry"], "Stop Loss": smc["Stop Loss"], "Target Price": smc["Target Price"],
+                "SMC Structure": smc["SMC Structure"], "Order Block": smc.get("Order Block", "NONE"),
+                "FVG Status": smc.get("FVG Status", "NONE"), "Chart Pattern": smc["Chart Pattern"],
                 "AI Win Prob": smc["AI Win Prob"], "Trap Risk": smc["Trap Risk"], "Action": "🔥 HIGH CONVICTION ENTRY"
             })
     return pd.DataFrame(rows)
@@ -284,7 +355,6 @@ def discover_best_strategies(tickers: list, mode="intraday"):
     keys, values = zip(*param_grid.items())
     combinations = [dict(zip(keys, v)) for v in itertools.product(*values)]
     
-    # Pre-calculate indicator vectors for each EMA span
     st.info("Pre-calculating indicator vectors...")
     prepared_data = {ema: {sym: attach_vectorized_indicators(df, ema) for sym, df in raw_data.items()} for ema in [10, 20, 50]}
     
