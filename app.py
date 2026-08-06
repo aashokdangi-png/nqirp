@@ -105,11 +105,10 @@ def fetch_upstox_live(symbol: str, interval: str = "5m") -> pd.DataFrame | None:
 
         instrument_key = get_upstox_instrument_key(symbol)
         
-        # Map app intervals to Upstox V3 parameters
+        # Upstox V3 Intraday Candle Endpoint for 5-minute intervals
         if interval in ["day", "1d", "daily"]:
             url = f"https://api.upstox.com/v3/historical-candle/intraday/{instrument_key}/days/1"
         else:
-            # V3 native support for 5-minute intervals using /minutes/5
             url = f"https://api.upstox.com/v3/historical-candle/intraday/{instrument_key}/minutes/5"
 
         headers = {
@@ -145,26 +144,10 @@ def fetch_upstox_live(symbol: str, interval: str = "5m") -> pd.DataFrame | None:
 
 @st.cache_data(ttl=10)
 def fetch_live_data(symbol: str, period: str = "5d", interval: str = "5m") -> pd.DataFrame:
-    """Loads clean historical data via Yahoo Finance and updates the latest candle with Upstox live LTP."""
-    df = fetch_historical_backtest_data(symbol, period=period, interval=interval)
-    if not df.empty:
-        live_price = fetch_upstox_live(symbol, interval=interval)
-        if live_price:
-            # Overwrite the latest candle close with the live Upstox price
-            df.loc[df.index[-1], "Close"] = round(live_price, 2)
-    return df
-
-
-@st.cache_data(ttl=10)
-def fetch_live_data(
-    symbol: str, period: str = "5d", interval: str = "5m"
-) -> pd.DataFrame:
     df_upstox = fetch_upstox_live(symbol, interval=interval)
-    if df_upstox is not None and not df_upstox.empty and len(df_upstox) > 15:
+    if df_upstox is not None and not df_upstox.empty and len(df_upstox) > 5:
         return df_upstox
-
     return fetch_historical_backtest_data(symbol, period=period, interval=interval)
-
 
 def fetch_historical_backtest_data(
     symbol: str, period: str = "1mo", interval: str = "5m"
