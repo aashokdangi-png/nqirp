@@ -859,7 +859,7 @@ page = st.sidebar.radio(
 
 if page == "⚡ Multi-Tab Live Scanner":
     st.title("⚡ Institutional Multi-Timeframe Scanner Engine")
-   tab_master, tab_intraday, tab_momentum, tab_swing, tab_meta, tab_t1 = st.tabs([
+ tab_master, tab_intraday, tab_momentum, tab_swing, tab_meta, tab_t1 = st.tabs([
         "🌟 Master Confluence",
         "⚡ Intraday SMC (5m)",
         "🚀 Momentum Leaders",
@@ -867,7 +867,6 @@ if page == "⚡ Multi-Tab Live Scanner":
         "🧠 Meta-Contrarian",
         "🎯 Next-Day (T+1) Target"
     ])
-
     with tab_master:
         st.subheader("🌟 Unified Master Confluence Dashboard")
         if st.button("🌟 Run Unified Master Scan", type="primary"):
