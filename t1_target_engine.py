@@ -28,7 +28,6 @@ class T1TargetEngine:
         cpr = T1TargetEngine.calculate_cpr(df_daily)
         close = df_daily["Close"].iloc[-1]
         
-        # Calculate 14-day ATR if not present
         if "ATR" in df_daily.columns:
             atr = df_daily["ATR"].iloc[-1]
         else:
@@ -37,7 +36,6 @@ class T1TargetEngine:
             if pd.isna(atr):
                 atr = close * 0.015
 
-        # Single-day target calculation capped at R1/S1 and 1.2x ATR
         target_bullish = min(close + (1.2 * atr), cpr["R1"])
         target_bearish = max(close - (1.2 * atr), cpr["S1"])
         sl_bullish = round(close - (0.8 * atr), 2)
@@ -54,4 +52,61 @@ class T1TargetEngine:
             "R1 / S1 Boundary": f"{cpr['R1']} / {cpr['S1']}",
             "Max Daily Volatility (1.2x ATR)": round(1.2 * atr, 2),
             "Status": "🔥 T+1 TARGET GENERATED"
+        }
+
+    @staticmethod
+    def backtest_t1_strategy(df_daily: pd.DataFrame, atr_mult: float = 1.2, sl_mult: float = 0.8) -> dict:
+        """Simulates next-day (T+1) target hit rates and profit factor over historical daily bars."""
+        if len(df_daily) < 20:
+            return None
+
+        df = df_daily.copy().reset_index(drop=True)
+        high_low = df["High"] - df["Low"]
+        df["ATR"] = high_low.rolling(14).mean()
+
+        total_trades = 0
+        target_hits = 0
+        sl_hits = 0
+        pnl_list = []
+
+        for i in range(15, len(df) - 1):
+            entry_close = df.loc[i, "Close"]
+            atr = df.loc[i, "ATR"]
+            if pd.isna(atr) or atr == 0:
+                continue
+
+            next_high = df.loc[i + 1, "High"]
+            next_low = df.loc[i + 1, "Low"]
+
+            target_price = entry_close + (atr_mult * atr)
+            sl_price = entry_close - (sl_mult * atr)
+
+            total_trades += 1
+
+            if next_high >= target_price:
+                target_hits += 1
+                pnl_list.append((target_price - entry_close) / entry_close * 100)
+            elif next_low <= sl_price:
+                sl_hits += 1
+                pnl_list.append((sl_price - entry_close) / entry_close * 100)
+            else:
+                next_close = df.loc[i + 1, "Close"]
+                pnl_list.append((next_close - entry_close) / entry_close * 100)
+
+        if total_trades == 0:
+            return None
+
+        hit_rate = (target_hits / total_trades) * 100
+        avg_pnl = np.mean(pnl_list) if pnl_list else 0
+        wins = [p for p in pnl_list if p > 0]
+        losses = [abs(p) for p in pnl_list if p < 0]
+        profit_factor = (sum(wins) / sum(losses)) if sum(losses) > 0 else np.nan
+
+        return {
+            "ATR Multiplier": f"{atr_mult}x",
+            "Total T+1 Sessions": total_trades,
+            "Target Hit Rate (%)": round(hit_rate, 2),
+            "SL Hit Rate (%)": round((sl_hits / total_trades) * 100, 2),
+            "Avg Session PnL (%)": round(avg_pnl, 2),
+            "Profit Factor": round(profit_factor, 2) if not np.isnan(profit_factor) else "N/A"
         }
