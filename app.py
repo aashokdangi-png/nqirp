@@ -1004,6 +1004,29 @@ elif page == "🧪 AI Strategy Discovery & Backtester":
                     "Could not find a high win-rate strategy permutation over the"
                     " specified sample size."
                 )
+st.markdown("---")
+    st.subheader("🎯 T+1 Intraday Target Strategy Discovery")
+    st.caption("Tests ATR expansion multipliers (0.8x to 1.5x) on historical daily sessions.")
+
+    selected_symbols = st.multiselect("Select Watchlist for Backtest", symbols, default=symbols[:5])
+
+    if st.button("🧪 Run T+1 Strategy Backtest"):
+        discovery_results = []
+        with st.spinner("Analyzing historical T+1 session hit rates..."):
+            for sym in selected_symbols:
+                df_hist = fetch_historical_backtest_data(sym, period="6mo", interval="1d")
+                if not df_hist.empty:
+                    for mult in [0.8, 1.0, 1.2, 1.5]:
+                        res = T1TargetEngine.backtest_t1_strategy(df_hist, atr_mult=mult)
+                        if res:
+                            res["Symbol"] = sym
+                            discovery_results.append(res)
+                            
+        if discovery_results:
+            st.dataframe(pd.DataFrame(discovery_results), use_container_width=True)
+        else:
+            st.warning("No backtest data returned for selected symbols.")
+
 # --- TEMPORARY DIAGNOSTIC BLOCK ---
 with st.sidebar.expander("🔍 Live Upstox API Diagnostic", expanded=True):
     diag_token = get_upstox_access_token()
