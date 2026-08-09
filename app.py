@@ -10,6 +10,7 @@ import requests
 import streamlit as st
 import yfinance as yf
 from sklearn.ensemble import RandomForestClassifier
+from t1_target_engine import T1TargetEngine
 
 st.set_page_config(
     page_title="NQIRP Institutional Quant Engine", page_icon="⚡", layout="wide"
@@ -858,12 +859,13 @@ page = st.sidebar.radio(
 
 if page == "⚡ Multi-Tab Live Scanner":
     st.title("⚡ Institutional Multi-Timeframe Scanner Engine")
-    tab_master, tab_intraday, tab_momentum, tab_swing, tab_contrarian = st.tabs([
+   tab_master, tab_intraday, tab_momentum, tab_swing, tab_meta, tab_t1 = st.tabs([
         "🌟 Master Confluence",
         "⚡ Intraday SMC (5m)",
-        "🚀 Momentum Leaders (5m)",
-        "📈 Swing Signals (1D Daily)",
-        "🧠 Meta-Contrarian Engine",
+        "🚀 Momentum Leaders",
+        "📈 Swing Signals",
+        "🧠 Meta-Contrarian",
+        "🎯 Next-Day (T+1) Target"
     ])
 
     with tab_master:
@@ -949,6 +951,23 @@ if page == "⚡ Multi-Tab Live Scanner":
                     st.dataframe(df_res, use_container_width=True)
                 else:
                     st.info("No crowd traps detected.")
+    with tab_t1:
+        st.subheader("🎯 Next-Day (T+1) Target Estimation & Adaptive Engine")
+        st.caption("Post-market target generator (3:15 PM) & live single-session range estimation.")
+        
+        if st.button("🚀 Run T+1 Target Generator"):
+            with st.spinner("Fetching daily OHLC and calculating tomorrow's targets..."):
+                t1_results = []
+                for sym in symbols:
+                    df_d = fetch_live_data(sym, period="3mo", interval="1d")
+                    if not df_d.empty:
+                        res = T1TargetEngine.generate_t1_targets(df_d, sym)
+                        if res:
+                            t1_results.append(res)
+                if t1_results:
+                    st.dataframe(pd.DataFrame(t1_results), use_container_width=True)
+                else:
+                    st.warning("No data retrieved for selected watchlist.")
 
 elif page == "🧪 AI Strategy Discovery & Backtester":
     st.title("🧪 Fast In-Memory Strategy Discovery Engine")
