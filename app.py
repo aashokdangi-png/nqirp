@@ -1017,25 +1017,24 @@ elif page == "🧪 AI Strategy Discovery & Backtester":
                     best_win_rate = 0
                     best_res = None
                     
-                    # AI automatically tests multiple ATR permutations
-                    for mult in [0.5, 0.8, 1.0, 1.2, 1.5, 1.8, 2.0]:
+                    # Expanded institutional test permutations
+                    for mult in [1.0, 1.2, 1.5, 1.8, 2.0, 2.5]:
                         res = T1TargetEngine.backtest_t1_strategy(df_hist, atr_mult=mult)
-                        if res and res["Target Hit Rate (%)"] > best_win_rate:
+                        if res and res.get("Target Hit Rate (%)", 0) > best_win_rate:
                             best_win_rate = res["Target Hit Rate (%)"]
                             best_res = res
                             
                     if best_res:
-                        # Format the final optimized output
                         final_res = {"Symbol": sym}
                         final_res.update(best_res)
-                        final_res["Optimization Status"] = "🔥 MAX EDGE FOUND" if best_win_rate > 50 else "⚠️ LOW WIN RATE"
+                        final_res["Optimization Status"] = "🔥 INSTITUTIONAL EDGE" if best_win_rate >= 40 else "⚠️ SUB-OPTIMAL"
                         optimized_results.append(final_res)
                         
         if optimized_results:
-            st.success("Optimization complete! Here are the best mathematical edges for your watchlist:")
+            st.success("Optimization complete! Here are the highest-probability mathematical edges found:")
             st.dataframe(pd.DataFrame(optimized_results), use_container_width=True)
         else:
-            st.warning("No backtest data returned for selected symbols.")  
+            st.warning("No backtest data returned for selected symbols.") 
 
 # --- TEMPORARY DIAGNOSTIC BLOCK ---
 with st.sidebar.expander("🔍 Live Upstox API Diagnostic", expanded=True):
