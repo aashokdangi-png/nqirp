@@ -857,7 +857,7 @@ page = st.sidebar.radio(
     ["⚡ Multi-Tab Live Scanner", "🧪 AI Strategy Discovery & Backtester"],
 )
 if page == "⚡ Multi-Tab Live Scanner":
-    tab_master, tab_intraday, tab_momentum, tab_swing, tab_meta, tab_t1 = st.tabs([
+    tab_master, tab_intraday, tab_momentum, tab_swing, tab_contrarian, tab_t1 = st.tabs([
         "🌟 Master Confluence",
         "⚡ Intraday SMC (5m)",
         "🚀 Momentum Leaders",
