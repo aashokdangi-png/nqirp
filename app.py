@@ -1002,7 +1002,7 @@ elif page == "🧪 AI Strategy Discovery & Backtester":
                     "Could not find a high win-rate strategy permutation over the"
                     " specified sample size."
                 )
-st.markdown("---")
+    st.markdown("---")
     st.subheader("🎯 T+1 Intraday Target Strategy Discovery")
     st.caption("Tests ATR expansion multipliers (0.8x to 1.5x) on historical daily sessions.")
 
