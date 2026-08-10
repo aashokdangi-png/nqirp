@@ -836,7 +836,7 @@ if page == "⚡ Multi-Tab Live Scanner":
                     st.dataframe(df_res, use_container_width=True)
                 else:
                     st.info("No crowd traps detected.")
-with tab_t1:
+    with tab_t1:
         st.subheader("🎯 Next-Day (T+1) Target & Live Market Evaluator")
         st.caption("Post-market target generator & live market parameter evaluator.")
 
