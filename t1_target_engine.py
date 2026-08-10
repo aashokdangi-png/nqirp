@@ -55,6 +55,54 @@ class T1TargetEngine:
         }
 
     @staticmethod
+    def evaluate_live_t1_signal(t1_target: dict, df_live_5m: pd.DataFrame, nifty_change_pct: float = 0.0) -> dict:
+        """Evaluates a static T+1 target against live 5m market action & sentiment."""
+        if df_live_5m.empty or len(df_live_5m) < 3:
+            t1_target["Live Action"] = "⏳ WAITING FOR DATA"
+            return t1_target
+
+        last = df_live_5m.iloc[-1]
+        open_price = df_live_5m["Open"].iloc[0]
+        c_live = last["Close"]
+        vwap = last.get("VWAP", c_live)
+        rvol = last.get("RVOL", 1.0)
+
+        target_bull = t1_target["T+1 Bullish Target"]
+        target_bear = t1_target["T+1 Bearish Target"]
+        sl_bull = t1_target["Bullish SL"]
+        sl_bear = t1_target["Bearish SL"]
+
+        # Gap Exhaustion Filter
+        if open_price >= target_bull:
+            t1_target["Live Action"] = "⚠️ GAP EXHAUSTED (OVERTARGET)"
+            t1_target["Signal Quality"] = "INVALID ❌"
+            return t1_target
+
+        # Live Bullish Trigger
+        if c_live > open_price and c_live > vwap and rvol >= 1.2 and nifty_change_pct >= -0.2:
+            if c_live < target_bull and c_live > sl_bull:
+                t1_target["Live Action"] = "🔥 LIVE BULLISH ENTRY"
+                t1_target["Signal Quality"] = "HIGH CONVICTION 🟢"
+                return t1_target
+
+        # Live Bearish Trigger
+        if c_live < open_price and c_live < vwap and rvol >= 1.2 and nifty_change_pct <= 0.2:
+            if c_live > target_bear and c_live < sl_bear:
+                t1_target["Live Action"] = "🩸 LIVE BEARISH ENTRY"
+                t1_target["Signal Quality"] = "HIGH CONVICTION 🔴"
+                return t1_target
+
+        # Invalidation
+        if c_live <= sl_bull and c_live >= sl_bear:
+            t1_target["Live Action"] = "🛑 STOP LOSS INVALIDATED"
+            t1_target["Signal Quality"] = "EXIT ❌"
+        else:
+            t1_target["Live Action"] = "⏳ NO CLEAR DIRECTION"
+            t1_target["Signal Quality"] = "NEUTRAL ⚪"
+
+        return t1_target
+
+    @staticmethod
     def backtest_t1_strategy(
         df_daily: pd.DataFrame, 
         atr_mult: float = 1.2, 
@@ -62,10 +110,7 @@ class T1TargetEngine:
         slippage_pct: float = 0.0005,
         spread_pct: float = 0.0002
     ) -> dict:
-        """
-        Simulates next-day (T+1) targets with execution friction (slippage/spread)
-        and minimum sample size validation.
-        """
+        """Simulates next-day (T+1) targets with execution friction and sample validation."""
         if len(df_daily) < 30:
             return None
 
@@ -86,7 +131,6 @@ class T1TargetEngine:
             if pd.isna(atr) or atr == 0:
                 continue
 
-            # Friction-adjusted entry
             entry_close = raw_entry * (1.0 + total_friction)
 
             next_high = df.loc[i + 1, "High"]
@@ -110,7 +154,6 @@ class T1TargetEngine:
                 exit_price = next_close * (1.0 - total_friction)
                 pnl_list.append((exit_price - entry_close) / entry_close * 100)
 
-        # Anti-Curve Fitting Safeguard: require min sample size
         if total_trades < 20:
             return None
 
