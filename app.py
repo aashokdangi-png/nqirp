@@ -837,7 +837,7 @@ if page == "⚡ Multi-Tab Live Scanner":
                 else:
                     st.info("No crowd traps detected.")
 
-with tab_t1:
+  with tab_t1:
         st.subheader("🎯 Next-Day (T+1) Target & Live Market Evaluator")
         st.caption("Post-market target generator & live market parameter evaluator.")
 
@@ -866,8 +866,7 @@ with tab_t1:
                     st.dataframe(pd.DataFrame(evaluated_results), use_container_width=True)
                 else:
                     st.warning("No data retrieved for selected watchlist.")
-
-
+                
 elif page == "🧪 AI Strategy Discovery & Backtester":
     st.title("🧪 Fast In-Memory Strategy Discovery Engine")
     st.caption("Runs fast in-memory SMC strategy discovery with friction modeling & ML model training.")
