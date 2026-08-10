@@ -57,8 +57,9 @@ class T1TargetEngine:
     @staticmethod
     def evaluate_live_t1_signal(t1_target: dict, df_live_5m: pd.DataFrame, nifty_change_pct: float = 0.0) -> dict:
         """Evaluates a static T+1 target against live 5m market action & sentiment."""
-        if df_live_5m.empty or len(df_live_5m) < 3:
+        if df_live_5m is None or df_live_5m.empty or len(df_live_5m) < 3:
             t1_target["Live Action"] = "⏳ WAITING FOR DATA"
+            t1_target["Signal Quality"] = "NEUTRAL ⚪"
             return t1_target
 
         last = df_live_5m.iloc[-1]
