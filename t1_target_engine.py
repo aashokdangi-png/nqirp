@@ -55,9 +55,18 @@ class T1TargetEngine:
         }
 
     @staticmethod
-    def backtest_t1_strategy(df_daily: pd.DataFrame, atr_mult: float = 1.2, sl_mult: float = 0.8) -> dict:
-        """Simulates next-day (T+1) target hit rates and profit factor over historical daily bars."""
-        if len(df_daily) < 20:
+    def backtest_t1_strategy(
+        df_daily: pd.DataFrame, 
+        atr_mult: float = 1.2, 
+        sl_mult: float = 0.8,
+        slippage_pct: float = 0.0005,
+        spread_pct: float = 0.0002
+    ) -> dict:
+        """
+        Simulates next-day (T+1) targets with execution friction (slippage/spread)
+        and minimum sample size validation.
+        """
+        if len(df_daily) < 30:
             return None
 
         df = df_daily.copy().reset_index(drop=True)
@@ -69,11 +78,16 @@ class T1TargetEngine:
         sl_hits = 0
         pnl_list = []
 
+        total_friction = slippage_pct + (spread_pct / 2.0)
+
         for i in range(15, len(df) - 1):
-            entry_close = df.loc[i, "Close"]
+            raw_entry = df.loc[i, "Close"]
             atr = df.loc[i, "ATR"]
             if pd.isna(atr) or atr == 0:
                 continue
+
+            # Friction-adjusted entry
+            entry_close = raw_entry * (1.0 + total_friction)
 
             next_high = df.loc[i + 1, "High"]
             next_low = df.loc[i + 1, "Low"]
@@ -85,15 +99,19 @@ class T1TargetEngine:
 
             if next_high >= target_price:
                 target_hits += 1
-                pnl_list.append((target_price - entry_close) / entry_close * 100)
+                exit_price = target_price * (1.0 - total_friction)
+                pnl_list.append((exit_price - entry_close) / entry_close * 100)
             elif next_low <= sl_price:
                 sl_hits += 1
-                pnl_list.append((sl_price - entry_close) / entry_close * 100)
+                exit_price = sl_price * (1.0 - total_friction)
+                pnl_list.append((exit_price - entry_close) / entry_close * 100)
             else:
                 next_close = df.loc[i + 1, "Close"]
-                pnl_list.append((next_close - entry_close) / entry_close * 100)
+                exit_price = next_close * (1.0 - total_friction)
+                pnl_list.append((exit_price - entry_close) / entry_close * 100)
 
-        if total_trades == 0:
+        # Anti-Curve Fitting Safeguard: require min sample size
+        if total_trades < 20:
             return None
 
         hit_rate = (target_hits / total_trades) * 100
@@ -108,5 +126,6 @@ class T1TargetEngine:
             "Target Hit Rate (%)": round(hit_rate, 2),
             "SL Hit Rate (%)": round((sl_hits / total_trades) * 100, 2),
             "Avg Session PnL (%)": round(avg_pnl, 2),
-            "Profit Factor": round(profit_factor, 2) if not np.isnan(profit_factor) else "N/A"
+            "Profit Factor": round(profit_factor, 2) if not np.isnan(profit_factor) else "N/A",
+            "Friction Deduction": f"{round(total_friction*200, 2)}% roundtrip"
         }
