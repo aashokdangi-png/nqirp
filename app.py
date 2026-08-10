@@ -837,21 +837,34 @@ if page == "⚡ Multi-Tab Live Scanner":
                 else:
                     st.info("No crowd traps detected.")
 
-    with tab_t1:
-        st.subheader("🎯 Next-Day (T+1) Target Estimation & Adaptive Engine")
-        st.caption("Post-market target generator (3:15 PM) & live single-session range estimation.")
-        
-        if st.button("🚀 Run T+1 Target Generator"):
-            with st.spinner("Fetching daily OHLC and calculating tomorrow's targets..."):
-                t1_results = []
+with tab_t1:
+        st.subheader("🎯 Next-Day (T+1) Target & Live Market Evaluator")
+        st.caption("Post-market target generator & live market parameter evaluator.")
+
+        if st.button("🚀 Run Live T+1 Target Evaluator"):
+            with st.spinner("Analyzing daily targets against live market sentiment & VWAP..."):
+                # Fetch broad market index sentiment (Nifty 50)
+                nifty_df = fetch_live_data("^NSEI", period="1d", interval="5m")
+                nifty_pct = 0.0
+                if not nifty_df.empty:
+                    nifty_pct = ((nifty_df["Close"].iloc[-1] - nifty_df["Open"].iloc[0]) / nifty_df["Open"].iloc[0]) * 100
+
+                st.caption(f"📊 Broad Market Sentiment (Nifty 50 Live): `{round(nifty_pct, 2)}%`")
+
+                evaluated_results = []
                 for sym in symbols:
-                    df_d = fetch_live_data(sym, period="3mo", interval="1d")
-                    if not df_d.empty:
-                        res = T1TargetEngine.generate_t1_targets(df_d, sym)
-                        if res:
-                            t1_results.append(res)
-                if t1_results:
-                    st.dataframe(pd.DataFrame(t1_results), use_container_width=True)
+                    df_daily = fetch_live_data(sym, period="3mo", interval="1d")
+                    df_5m = fetch_live_data(sym, period="1d", interval="5m")
+                    
+                    if not df_daily.empty:
+                        base_t1 = T1TargetEngine.generate_t1_targets(df_daily, sym)
+                        if base_t1:
+                            # Evaluate against live 5-minute price action & Nifty sentiment
+                            live_t1 = T1TargetEngine.evaluate_live_t1_signal(base_t1, df_5m, nifty_pct)
+                            evaluated_results.append(live_t1)
+
+                if evaluated_results:
+                    st.dataframe(pd.DataFrame(evaluated_results), use_container_width=True)
                 else:
                     st.warning("No data retrieved for selected watchlist.")
 
