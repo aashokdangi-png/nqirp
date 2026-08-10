@@ -836,14 +836,12 @@ if page == "⚡ Multi-Tab Live Scanner":
                     st.dataframe(df_res, use_container_width=True)
                 else:
                     st.info("No crowd traps detected.")
-
-  with tab_t1:
+with tab_t1:
         st.subheader("🎯 Next-Day (T+1) Target & Live Market Evaluator")
         st.caption("Post-market target generator & live market parameter evaluator.")
 
         if st.button("🚀 Run Live T+1 Target Evaluator"):
             with st.spinner("Analyzing daily targets against live market sentiment & VWAP..."):
-                # Fetch broad market index sentiment (Nifty 50)
                 nifty_df = fetch_live_data("^NSEI", period="1d", interval="5m")
                 nifty_pct = 0.0
                 if not nifty_df.empty:
@@ -866,7 +864,7 @@ if page == "⚡ Multi-Tab Live Scanner":
                     st.dataframe(pd.DataFrame(evaluated_results), use_container_width=True)
                 else:
                     st.warning("No data retrieved for selected watchlist.")
-                
+
 elif page == "🧪 AI Strategy Discovery & Backtester":
     st.title("🧪 Fast In-Memory Strategy Discovery Engine")
     st.caption("Runs fast in-memory SMC strategy discovery with friction modeling & ML model training.")
