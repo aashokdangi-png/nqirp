@@ -855,11 +855,10 @@ with tab_t1:
                 for sym in symbols:
                     df_daily = fetch_live_data(sym, period="3mo", interval="1d")
                     df_5m = fetch_live_data(sym, period="1d", interval="5m")
-                    
+
                     if not df_daily.empty:
                         base_t1 = T1TargetEngine.generate_t1_targets(df_daily, sym)
                         if base_t1:
-                            # Evaluate against live 5-minute price action & Nifty sentiment
                             live_t1 = T1TargetEngine.evaluate_live_t1_signal(base_t1, df_5m, nifty_pct)
                             evaluated_results.append(live_t1)
 
@@ -867,6 +866,7 @@ with tab_t1:
                     st.dataframe(pd.DataFrame(evaluated_results), use_container_width=True)
                 else:
                     st.warning("No data retrieved for selected watchlist.")
+
 
 elif page == "🧪 AI Strategy Discovery & Backtester":
     st.title("🧪 Fast In-Memory Strategy Discovery Engine")
