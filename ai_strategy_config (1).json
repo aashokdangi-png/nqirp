@@ -1,0 +1,17 @@
+{
+    "engine": "Colab Dynamic AI Engine",
+    "timestamp": "2026-08-11 18:15",
+    "min_rvol": 1.2,
+    "features": [
+        "RVOL",
+        "ATR_Pct",
+        "RSI",
+        "Liquidity_Sweep_High",
+        "Liquidity_Sweep_Low",
+        "Bullish_FVG",
+        "Bullish_OB",
+        "Pattern_Flag_Breakout",
+        "Market_Sentiment"
+    ],
+    "accuracy_score": 74.83
+}
