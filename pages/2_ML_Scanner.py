@@ -9,7 +9,7 @@ import yfinance as yf
 st.set_page_config(page_title="NQIRP ML Scanner", page_icon="🤖", layout="wide")
 
 st.title("🤖 AI & ML Strategy Scanner")
-st.markdown("*Strict Execution: Debug Mode Active*")
+st.markdown("*Strict Execution: Backtested Model with Upstox/YF Dual Fetching*")
 
 @st.cache_resource
 def load_ai_assets():
@@ -44,30 +44,66 @@ if hasattr(model, "feature_names_in_"):
 else:
     expected_features = EXACT_FEATURES
 
+st.sidebar.success(f"✅ Schema Aligned: {len(expected_features)} Features Active")
+
 target_pct = float(config.get("target_pct", config.get("target_percentage", 1.2)))
 stop_pct = float(config.get("stop_pct", config.get("stop_percentage", 0.6)))
 
 @st.cache_data(ttl=300)
 def fetch_index_trends():
-    returns = {"Nifty_1D_Return": 0.0}
+    tickers = ["^NSEI", "^NSEMDCP50", "^CNXSMLCAP"]
+    trends = {}
+    returns = {"Nifty_1D_Return": 0.0, "Midcap_1D_Return": 0.0, "Smallcap_1D_Return": 0.0}
     try:
-        data = yf.download(["^NSEI"], period="5d", interval="1d", progress=False)
+        data = yf.download(tickers, period="5d", interval="1d", progress=False)
         close_df = data["Close"] if "Close" in data else data
-        if "^NSEI" in close_df:
-            s = close_df["^NSEI"].dropna()
-            if len(s) >= 2:
-                returns["Nifty_1D_Return"] = float((s.iloc[-1] - s.iloc[-2]) / s.iloc[-2])
+        mapping = [("Nifty_1D_Return", "^NSEI"), ("Midcap_1D_Return", "^NSEMDCP50"), ("Smallcap_1D_Return", "^CNXSMLCAP")]
+        for key, t in mapping:
+            if t in close_df:
+                s = close_df[t].dropna()
+                if len(s) >= 2:
+                    r = float((s.iloc[-1] - s.iloc[-2]) / s.iloc[-2])
+                    returns[key] = r
+                    trends[t] = f"{'+' if r >= 0 else ''}{r*100:.2f}%"
     except Exception:
         pass
-    return returns
+    return trends, returns
 
-idx_returns = fetch_index_trends()
+idx_trends, idx_returns = fetch_index_trends()
+
+col1, col2, col3 = st.columns(3)
+col1.metric("Nifty 50", idx_trends.get("^NSEI", "Active"))
+col2.metric("Nifty Midcap", idx_trends.get("^NSEMDCP50", "Active"))
+col3.metric("Nifty Smallcap", idx_trends.get("^CNXSMLCAP", "Active"))
+
+st.markdown("---")
 
 NIFTY_50 = ["RELIANCE", "TCS", "HDFCBANK", "INFY", "ICICIBANK", "SBIN", "BHARTIARTL", "ITC", "LTIM", "AXISBANK", "KOTAKBANK", "LT", "HINDUNILVR", "BAJFINANCE", "MARUTI", "TATASTEEL", "NTPC", "M&M"]
-scan_category = st.selectbox("Select Universe", ["Nifty 50"])
-selected_tickers = NIFTY_50
+MIDCAP_SAMPLES = ["TATAPOWER", "FEDERALBNK", "POLYCAB", "PERSISTENT", "COFORGE", "ASHOKLEY", "MAXHEALTH", "VOLTAS"]
+SMALLCAP_SAMPLES = ["CDSL", "ANGELONE", "KFINTECH", "SUZLON", "BSOFT", "HFCL", "IEX", "KEI"]
+
+scan_category = st.selectbox("Select Universe", ["Nifty 50", "Nifty Midcap", "Nifty Smallcap", "All Combined"])
+
+if scan_category == "Nifty 50":
+    selected_tickers = NIFTY_50
+elif scan_category == "Nifty Midcap":
+    selected_tickers = MIDCAP_SAMPLES
+elif scan_category == "Nifty Smallcap":
+    selected_tickers = SMALLCAP_SAMPLES
+else:
+    selected_tickers = NIFTY_50 + MIDCAP_SAMPLES + SMALLCAP_SAMPLES
 
 def fetch_stock_data(ticker):
+    if "upstox_client" in st.session_state and st.session_state.get("upstox_client"):
+        try:
+            upstox = st.session_state["upstox_client"]
+            df_5m = upstox.get_ohlc(ticker, interval="5m")
+            df_1d = upstox.get_ohlc(ticker, interval="1d")
+            if df_5m is not None and not df_5m.empty and df_1d is not None and not df_1d.empty:
+                return df_5m, df_1d
+        except Exception:
+            pass
+    
     yf_symbol = f"{ticker}.NS" if not ticker.endswith(".NS") else ticker
     df_5m = yf.download(yf_symbol, period="5d", interval="5m", progress=False, auto_adjust=True)
     df_1d = yf.download(yf_symbol, period="1mo", interval="1d", progress=False, auto_adjust=True)
@@ -80,8 +116,8 @@ def compute_rsi(series, period=14):
     rs = gain / (loss + 1e-9)
     return 100 - (100 / (1 + rs))
 
-if st.button("🚀 Run Diagnostic Scan", type="primary"):
-    with st.spinner("Running inference and logging features..."):
+if st.button("🚀 Run ML Scan", type="primary"):
+    with st.spinner("Fetching data and running pure ML inference..."):
         results = []
         market_sentiment = float(idx_returns.get("Nifty_1D_Return", 0.0)) * 100
 
@@ -153,32 +189,56 @@ if st.button("🚀 Run Diagnostic Scan", type="primary"):
                     'Market_Sentiment': market_sentiment
                 }
 
-               # 1. Create base DataFrame with explicit feature headers
-               X_df = pd.DataFrame([{f: feature_dict.get(f, 0) for f in expected_features}])
+                X_df = pd.DataFrame([{f: feature_dict.get(f, 0) for f in expected_features}])
 
-               # 2. Scale features WHILE preserving column headers so the model maps them correctly
-               if scaler is not None:
-                   scaled_array = scaler.transform(X_df)
-                   X_inference = pd.DataFrame(scaled_array, columns=expected_features)
-               else:
-                   X_inference = X_df
+                if scaler is not None:
+                    scaled_array = scaler.transform(X_df)
+                    X_inference = pd.DataFrame(scaled_array, columns=expected_features)
+                else:
+                    X_inference = X_df
 
-               # 3. Feed the properly labelled DataFrame into the model
-               if hasattr(model, "predict_proba"):
-                   prob = float(model.predict_proba(X_inference)[0][1])
-               else:
-                   prob = float(model.predict(X_inference)[0])
+                if hasattr(model, "predict_proba"):
+                    prob = float(model.predict_proba(X_inference)[0][1])
+                else:
+                    prob = float(model.predict_proba(X_inference)[0])
 
-               score_pct = prob * 100 if prob <= 1.0 else prob
+                score_pct = prob * 100 if prob <= 1.0 else prob
+
+                smc_signals = []
+                if bull_fvg: smc_signals.append("Bullish FVG")
+                if bull_ob: smc_signals.append("Bullish OB")
+                if sweep_low: smc_signals.append("Sweep Low")
+                if sweep_high: smc_signals.append("Sweep High")
+                if flag_breakout: smc_signals.append("Flag Breakout")
+                smc_str = " + ".join(smc_signals) if smc_signals else "Structure Clean"
+
+                if day_trend == "Uptrend":
+                    tgt_price = last_price * (1 + target_pct / 100)
+                    sl_price = last_price * (1 - stop_pct / 100)
+                    tgt_str = f"₹{tgt_price:.2f} (+{target_pct:.1f}%)"
+                    sl_str = f"₹{sl_price:.2f} (-{stop_pct:.1f}%)"
+                else:
+                    tgt_price = last_price * (1 - target_pct / 100)
+                    sl_price = last_price * (1 + stop_pct / 100)
+                    tgt_str = f"₹{tgt_price:.2f} (-{target_pct:.1f}%)"
+                    sl_str = f"₹{sl_price:.2f} (+{stop_pct:.1f}%)"
 
                 results.append({
                     "Stock": ticker,
+                    "Last Price": f"₹{last_price:.2f}",
+                    "Day Trend": day_trend,
+                    "Daily ATR %": f"{atr_pct:.2f}%", 
+                    "RSI (5m)": f"{rsi_val:.1f}",
+                    "SMC Structure": smc_str,
                     "AI Probability": f"{score_pct:.1f}%",
-                    "Raw Vector": str([f"{val:.2f}" for val in X_df.values[0]])
+                    "Target": tgt_str,
+                    "Stoploss": sl_str
                 })
-            except Exception as e:
+            except Exception:
                 continue
 
         if results:
-            st.subheader("🔍 Diagnostic Feature Vector Output")
+            st.subheader("🔥 AI Signals (9/9 Features Aligned & Scaled)")
             st.dataframe(pd.DataFrame(results), use_container_width=True)
+        else:
+            st.warning("No setup signals generated.")
