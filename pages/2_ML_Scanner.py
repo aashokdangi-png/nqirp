@@ -128,7 +128,7 @@ if st.button("🚀 Run ML Scan", type="primary"):
     with st.spinner("Fetching data and running pure ML inference..."):
         results = []
         # Sentiment scaled to percentage to match model training scales
-        market_sentiment = float(idx_returns.get("Nifty_1D_Return", 0.0)) * 100
+        market_sentiment = float(idx_returns.get("Nifty_1D_Return", 0.0))
 
         for ticker in selected_tickers:
             try:
@@ -170,7 +170,7 @@ if st.button("🚀 Run ML Scan", type="primary"):
                 ], axis=1).max(axis=1)
                 
                 atr_14 = tr_1d.tail(14).mean()
-                atr_pct = float((atr_14 / last_price) * 100)
+                atr_pct = float(atr_14 / last_price)
 
                 # Feature 3: RSI (5m)
                 rsi_series = compute_rsi(close_5m, period=14)
