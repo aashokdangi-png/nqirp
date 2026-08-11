@@ -11,7 +11,6 @@ st.set_page_config(page_title="NQIRP ML Scanner", page_icon="🤖", layout="wide
 st.title("🤖 AI & ML Strategy Scanner")
 st.markdown("*Strict Execution: Backtested Model with Upstox/YF Dual Fetching*")
 
-# 1. Load Trained Assets & Strict Config
 @st.cache_resource
 def load_ai_assets():
     model = joblib.load("colab_ai_model.pkl") if os.path.exists("colab_ai_model.pkl") else None
@@ -28,7 +27,6 @@ if model is None:
     st.error("Model file 'colab_ai_model.pkl' not found in repository.")
     st.stop()
 
-# Explicit 9-feature model schema strictly matched to Colab training
 EXACT_FEATURES = [
     'RVOL', 
     'ATR_Pct', 
@@ -48,11 +46,9 @@ else:
 
 st.sidebar.success(f"✅ Schema Aligned: {len(expected_features)} Features Active")
 
-# Target and Stoploss strictly from saved backtest parameters
 target_pct = float(config.get("target_pct", config.get("target_percentage", 1.2)))
 stop_pct = float(config.get("stop_pct", config.get("stop_percentage", 0.6)))
 
-# 2. Market Sentiment Context
 @st.cache_data(ttl=300)
 def fetch_index_trends():
     tickers = ["^NSEI", "^NSEMDCP50", "^CNXSMLCAP"]
@@ -97,7 +93,6 @@ elif scan_category == "Nifty Smallcap":
 else:
     selected_tickers = NIFTY_50 + MIDCAP_SAMPLES + SMALLCAP_SAMPLES
 
-# 3. Dual Data Fetching (Upstox Primary, YFinance Fallback)
 def fetch_stock_data(ticker):
     if "upstox_client" in st.session_state and st.session_state.get("upstox_client"):
         try:
@@ -121,13 +116,10 @@ def compute_rsi(series, period=14):
     rs = gain / (loss + 1e-9)
     return 100 - (100 / (1 + rs))
 
-# 4. Scanner Execution
 if st.button("🚀 Run ML Scan", type="primary"):
     with st.spinner("Fetching data and running pure ML inference..."):
         results = []
-        
-        # RESTORED: * 100 multiplier to scale sentiment for the ML model properly
-        market_sentiment = float(idx_returns.get("Nifty_1D_Return", 0.0)) * 100
+        market_sentiment = float(idx_returns.get("Nifty_1D_Return", 0.0))
 
         for ticker in selected_tickers:
             try:
@@ -158,10 +150,8 @@ if st.button("🚀 Run ML Scan", type="primary"):
                 day_open = float(open_1d.iloc[-1])
                 day_trend = "Uptrend" if last_price >= day_open else "Downtrend"
 
-                # Feature 1: RVOL (5m)
                 rvol = float(vol_5m.iloc[-1] / (vol_5m.tail(20).mean() + 1e-5))
 
-                # Feature 2: ATR_Pct (Daily timeframe)
                 tr_1d = pd.concat([
                     high_1d - low_1d, 
                     (high_1d - close_1d.shift(1)).abs(), 
@@ -169,37 +159,24 @@ if st.button("🚀 Run ML Scan", type="primary"):
                 ], axis=1).max(axis=1)
                 
                 atr_14 = tr_1d.tail(14).mean()
-                
-                # RESTORED: * 100 multiplier! This turns 0.02 into 2.0%, aligning with ML Model Scales.
-                atr_pct = float((atr_14 / last_price) * 100)
+                atr_pct = float(atr_14 / last_price)
 
-                # Feature 3: RSI (5m)
                 rsi_series = compute_rsi(close_5m, period=14)
                 rsi_val = float(rsi_series.iloc[-1]) if not np.isnan(rsi_series.iloc[-1]) else 50.0
 
-                # Feature 4: Liquidity_Sweep_High (5m)
                 recent_max = high_5m.iloc[-15:-1].max() if len(high_5m) >= 15 else high_5m.iloc[:-1].max()
                 sweep_high = 1 if high_5m.iloc[-1] > recent_max else 0
 
-                # Feature 5: Liquidity_Sweep_Low (5m)
                 recent_min = low_5m.iloc[-15:-1].min() if len(low_5m) >= 15 else low_5m.iloc[:-1].min()
                 sweep_low = 1 if low_5m.iloc[-1] < recent_min else 0
 
-                # Feature 6: Bullish_FVG (5m)
                 bull_fvg = 1 if (len(high_5m) >= 3 and low_5m.iloc[-1] > high_5m.iloc[-3]) else 0
-
-                # Feature 7: Bullish_OB (5m)
                 bull_ob = 1 if (close_5m.iloc[-2] < open_5m.iloc[-2] and close_5m.iloc[-1] > high_5m.iloc[-2]) else 0
 
-                # Feature 8: Pattern_Flag_Breakout (5m)
                 recent_range = (high_5m.tail(10).max() - low_5m.tail(10).min()) / last_price
                 price_chg = (close_5m.iloc[-1] - close_5m.iloc[-10]) / close_5m.iloc[-10]
                 flag_breakout = 1 if (price_chg > 0.003 and recent_range < 0.015) else 0
 
-                # Feature 9: Market_Sentiment
-                sentiment_val = market_sentiment
-
-                # Construct strict feature vector
                 feature_dict = {
                     'RVOL': rvol,
                     'ATR_Pct': atr_pct,
@@ -209,7 +186,7 @@ if st.button("🚀 Run ML Scan", type="primary"):
                     'Bullish_FVG': bull_fvg,
                     'Bullish_OB': bull_ob,
                     'Pattern_Flag_Breakout': flag_breakout,
-                    'Market_Sentiment': sentiment_val
+                    'Market_Sentiment': market_sentiment
                 }
 
                 X_df = pd.DataFrame([{f: feature_dict.get(f, 0) for f in expected_features}])
@@ -224,7 +201,6 @@ if st.button("🚀 Run ML Scan", type="primary"):
 
                 score_pct = prob * 100 if prob <= 1.0 else prob
 
-                # Format Confluences
                 smc_signals = []
                 if bull_fvg: smc_signals.append("Bullish FVG")
                 if bull_ob: smc_signals.append("Bullish OB")
@@ -233,7 +209,6 @@ if st.button("🚀 Run ML Scan", type="primary"):
                 if flag_breakout: smc_signals.append("Flag Breakout")
                 smc_str = " + ".join(smc_signals) if smc_signals else "Structure Clean"
 
-                # Standard Fixed Config Target & Stoploss Calculations
                 if day_trend == "Uptrend":
                     tgt_price = last_price * (1 + target_pct / 100)
                     sl_price = last_price * (1 - stop_pct / 100)
@@ -249,7 +224,7 @@ if st.button("🚀 Run ML Scan", type="primary"):
                     "Stock": ticker,
                     "Last Price": f"₹{last_price:.2f}",
                     "Day Trend": day_trend,
-                    "Daily ATR %": f"{atr_pct:.2f}%", 
+                    "Daily ATR %": f"{atr_pct * 100:.2f}%", 
                     "RSI (5m)": f"{rsi_val:.1f}",
                     "SMC Structure": smc_str,
                     "AI Probability": f"{score_pct:.1f}%",
