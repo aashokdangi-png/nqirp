@@ -8,28 +8,29 @@ import yfinance as yf
 st.set_page_config(page_title="NQIRP ML Scanner", page_icon="🤖", layout="wide")
 
 st.title("🤖 AI & ML Strategy Scanner")
-st.markdown("*1-Year Backtested Model | Smart Money Concepts & Dynamic Targets*")
+st.markdown("*Strict Execution: Derived Backtest Model & JSON Config*")
 
-# Load trained model and backtest configuration
+# Load trained model, optional scaler, and backtest strategy config
 @st.cache_resource
 def load_ai_assets():
     model = joblib.load("colab_ai_model.pkl") if os.path.exists("colab_ai_model.pkl") else None
+    scaler = joblib.load("colab_scaler.pkl") if os.path.exists("colab_scaler.pkl") else None
     config = {}
     if os.path.exists("ai_strategy_config.json"):
         with open("ai_strategy_config.json", "r") as f:
             config = json.load(f)
-    return model, config
+    return model, scaler, config
 
-model, config = load_ai_assets()
+model, scaler, config = load_ai_assets()
 
 if model is None:
-    st.error("Model file 'colab_ai_model.pkl' not found. Please verify repository uploads.")
+    st.error("Model file 'colab_ai_model.pkl' not found in repository.")
     st.stop()
 
-st.success("✅ Backtested AI Model & Config Active")
+st.success("✅ Pure Backtest Strategy Active")
 
-# Market Context
-st.subheader("📊 Market Sentiment & Sector Context")
+# Market Context Contextual Metrics
+st.subheader("📊 Market Sentiment Context")
 col1, col2, col3 = st.columns(3)
 
 @st.cache_data(ttl=300)
@@ -40,7 +41,6 @@ def fetch_index_trends():
     try:
         data = yf.download(tickers, period="5d", interval="1d", progress=False)
         close_df = data["Close"] if "Close" in data else data
-        
         mapping = [("Nifty_1D_Return", "^NSEI"), ("Midcap_1D_Return", "^NSEMDCP50"), ("Smallcap_1D_Return", "^CNXSMLCAP")]
         for key, t in mapping:
             if t in close_df:
@@ -54,22 +54,17 @@ def fetch_index_trends():
     return trends, returns
 
 idx_trends, idx_returns = fetch_index_trends()
-col1.metric("Nifty 50 (1D)", idx_trends.get("^NSEI", "Active"))
-col2.metric("Nifty Midcap (1D)", idx_trends.get("^NSEMDCP50", "Active"))
-col3.metric("Nifty Smallcap (1D)", idx_trends.get("^CNXSMLCAP", "Active"))
+col1.metric("Nifty 50", idx_trends.get("^NSEI", "Active"))
+col2.metric("Nifty Midcap", idx_trends.get("^NSEMDCP50", "Active"))
+col3.metric("Nifty Smallcap", idx_trends.get("^CNXSMLCAP", "Active"))
 
 st.markdown("---")
-
-st.subheader("🎯 Instant AI Signal Scanner")
 
 NIFTY_50 = ["RELIANCE", "TCS", "HDFCBANK", "INFY", "ICICIBANK", "SBIN", "BHARTIARTL", "ITC", "LTIM", "AXISBANK", "KOTAKBANK", "LT", "HINDUNILVR", "BAJFINANCE", "MARUTI", "TATASTEEL", "NTPC", "M&M"]
 MIDCAP_SAMPLES = ["TATAPOWER", "FEDERALBNK", "POLYCAB", "PERSISTENT", "COFORGE", "ASHOKLEY", "MAXHEALTH", "VOLTAS"]
 SMALLCAP_SAMPLES = ["CDSL", "ANGELONE", "KFINTECH", "SUZLON", "BSOFT", "HFCL", "IEX", "KEI"]
 
-scan_category = st.selectbox(
-    "Select Universe to Scan",
-    ["Nifty 50", "Nifty Midcap", "Nifty Smallcap", "All Indices Combined"]
-)
+scan_category = st.selectbox("Select Universe", ["Nifty 50", "Nifty Midcap", "Nifty Smallcap", "All Combined"])
 
 if scan_category == "Nifty 50":
     selected_tickers = NIFTY_50
@@ -80,32 +75,20 @@ elif scan_category == "Nifty Smallcap":
 else:
     selected_tickers = NIFTY_50 + MIDCAP_SAMPLES + SMALLCAP_SAMPLES
 
-st.write(f"**Total Stocks Loaded in Selected Universe:** {len(selected_tickers)}")
-
 def fetch_stock_data(ticker):
-    if "upstox_client" in st.session_state and st.session_state.get("upstox_client"):
-        try:
-            upstox = st.session_state["upstox_client"]
-            df_5m = upstox.get_ohlc(ticker, interval="5m")
-            df_1d = upstox.get_ohlc(ticker, interval="1d")
-            if df_5m is not None and not df_5m.empty and df_1d is not None and not df_1d.empty:
-                return df_5m, df_1d
-        except Exception:
-            pass
-    
     yf_symbol = f"{ticker}.NS" if not ticker.endswith(".NS") else ticker
     df_5m = yf.download(yf_symbol, period="5d", interval="5m", progress=False, auto_adjust=True)
     df_1d = yf.download(yf_symbol, period="10d", interval="1d", progress=False, auto_adjust=True)
     return df_5m, df_1d
 
-if st.button("🚀 Run Instant ML Scan", type="primary"):
-    with st.spinner("Processing live market feed against backtested model parameters..."):
+if st.button("🚀 Run Backtested ML Scan", type="primary"):
+    with st.spinner("Executing model pipeline..."):
         results = []
         
-        # Pull parameters generated strictly during backtesting in Colab
+        # Pull strategy configuration directly from backtest JSON
         expected_features = config.get("feature_names", config.get("features", []))
-        target_pct = float(config.get("target_pct", 1.2))
-        stop_pct = float(config.get("stop_pct", 0.6))
+        target_pct = float(config.get("target_pct", config.get("target_percentage", 1.2)))
+        stop_pct = float(config.get("stop_pct", config.get("stop_percentage", 0.6)))
 
         for ticker in selected_tickers:
             try:
@@ -123,7 +106,7 @@ if st.button("🚀 Run Instant ML Scan", type="primary"):
                 low_5m = df_5m["Low"].dropna()
                 open_5m = df_5m["Open"].dropna()
                 vol_5m = df_5m["Volume"].dropna() if "Volume" in df_5m else pd.Series(1, index=close_5m.index)
-
+                
                 close_1d = df_1d["Close"].dropna()
                 open_1d = df_1d["Open"].dropna()
 
@@ -134,7 +117,7 @@ if st.button("🚀 Run Instant ML Scan", type="primary"):
                 day_open = float(open_1d.iloc[-1])
                 day_trend = "Uptrend" if last_price >= day_open else "Downtrend"
 
-                # Feature extraction matching backtest raw inputs
+                # Standard strategy indicator extraction
                 rvol = float(vol_5m.iloc[-1] / (vol_5m.tail(20).mean() + 1e-5))
                 has_fvg = 1 if (len(high_5m) >= 3 and low_5m.iloc[-1] > high_5m.iloc[-3]) else 0
                 has_sweep = 1 if (len(low_5m) >= 11 and low_5m.iloc[-1] < low_5m.iloc[-11:-1].min()) else 0
@@ -146,7 +129,7 @@ if st.button("🚀 Run Instant ML Scan", type="primary"):
                 if has_ob: smc_signals.append("Order Block")
                 smc_str = " + ".join(smc_signals) if smc_signals else "Structure Clean"
 
-                # Feature vector formatted for trained model
+                # Raw inputs mapped strictly into backtested model feature names
                 feat_dict = {
                     'Direction': 1 if day_trend == "Uptrend" else 0,
                     'Day_Trend': 1 if day_trend == "Uptrend" else 0,
@@ -165,13 +148,17 @@ if st.button("🚀 Run Instant ML Scan", type="primary"):
                 else:
                     X_df = pd.DataFrame([feat_dict])
 
-                # Pure inference from backtested model
+                if scaler is not None:
+                    X_df = scaler.transform(X_df)
+
                 if hasattr(model, "predict_proba"):
                     prob = float(model.predict_proba(X_df)[0][1])
                 else:
                     prob = float(model.predict(X_df)[0])
 
-                # Calculate targets strictly using saved config percentages and price direction
+                score_pct = prob * 100 if prob <= 1.0 else prob
+
+                # Targets directly derived from saved config percentages & daily trend direction
                 if day_trend == "Uptrend":
                     tgt_price = last_price * (1 + target_pct / 100)
                     sl_price = last_price * (1 - stop_pct / 100)
@@ -188,7 +175,7 @@ if st.button("🚀 Run Instant ML Scan", type="primary"):
                     "Last Price": f"₹{last_price:.2f}",
                     "Day Trend (Daily)": day_trend,
                     "SMC Confluence": smc_str,
-                    "AI Confidence Score": f"{prob * 100:.1f}%" if prob <= 1.0 else f"{prob:.1f}%",
+                    "AI Confidence Score": f"{score_pct:.1f}%",
                     "Dynamic Target (Next Day)": tgt_str,
                     "Dynamic Stoploss": sl_str
                 })
@@ -196,7 +183,7 @@ if st.button("🚀 Run Instant ML Scan", type="primary"):
                 continue
 
         if results:
-            st.subheader("🔥 High-Probability AI Trading Signals")
+            st.subheader("🔥 Strategy-Driven AI Signals")
             st.dataframe(pd.DataFrame(results), use_container_width=True)
         else:
-            st.warning("No setup signals triggered for current market conditions.")
+            st.warning("No setups generated.")
