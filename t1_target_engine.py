@@ -76,7 +76,6 @@ class T1TargetEngine:
         last = df_today.iloc[-1]
         c_live = last["Close"]
         
-        # Calculate dynamic typical price VWAP if VWAP column is absent
         if "VWAP" in last and not pd.isna(last["VWAP"]):
             vwap = last["VWAP"]
         else:
@@ -87,34 +86,31 @@ class T1TargetEngine:
         sl_bull = t1_target["Bullish SL"]
         sl_bear = t1_target["Bearish SL"]
 
-        # 1. True Gap Exhaustion (Only if open opened above projected 1.2x ATR target)
+        move_pct = ((c_live - open_price) / open_price) * 100
+
+        # 1. True Gap Exhaustion Check
         if open_price >= target_bull:
             t1_target["Live Action"] = "⚠️ GAP EXHAUSTED (OVERTARGET)"
             t1_target["Signal Quality"] = "INVALID ❌"
             return t1_target
 
-        # 2. Live Bullish Trigger
-        if c_live >= open_price and c_live >= vwap and nifty_change_pct >= -0.5:
-            if c_live < target_bull and c_live > sl_bull:
+        # 2. Bullish Entry (Requires +0.25% breakout above Open & VWAP)
+        if move_pct >= 0.25 and c_live > vwap and nifty_change_pct >= -0.3:
+            if c_live < target_bull:
                 t1_target["Live Action"] = "🔥 LIVE BULLISH ENTRY"
                 t1_target["Signal Quality"] = "HIGH CONVICTION 🟢"
                 return t1_target
 
-        # 3. Live Bearish Trigger
-        if c_live <= open_price and c_live <= vwap and nifty_change_pct <= 0.5:
-            if c_live > target_bear and c_live < sl_bear:
+        # 3. Bearish Entry (Requires -0.25% breakdown below Open & VWAP)
+        if move_pct <= -0.25 and c_live < vwap and nifty_change_pct <= 0.3:
+            if c_live > target_bear:
                 t1_target["Live Action"] = "🩸 LIVE BEARISH ENTRY"
                 t1_target["Signal Quality"] = "HIGH CONVICTION 🔴"
                 return t1_target
 
-        # 4. Stop Loss Invalidation / Default
-        if c_live <= sl_bull and c_live >= sl_bear:
-            t1_target["Live Action"] = "🛑 STOP LOSS INVALIDATED"
-            t1_target["Signal Quality"] = "EXIT ❌"
-        else:
-            t1_target["Live Action"] = "⏳ NO CLEAR DIRECTION"
-            t1_target["Signal Quality"] = "NEUTRAL ⚪"
-
+        # 4. Default Neutral State for Normal Range / Flat Action
+        t1_target["Live Action"] = "⏳ NO CLEAR DIRECTION"
+        t1_target["Signal Quality"] = "NEUTRAL ⚪"
         return t1_target
 
     @staticmethod
