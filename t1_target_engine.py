@@ -36,17 +36,17 @@ class T1TargetEngine:
             if pd.isna(atr):
                 atr = close * 0.015
 
-        target_bullish = min(close + (1.2 * atr), cpr["R1"])
-        target_bearish = max(close - (1.2 * atr), cpr["S1"])
+        target_bullish = round(close + (1.2 * atr), 2)
+        target_bearish = round(close - (1.2 * atr), 2)
         sl_bullish = round(close - (0.8 * atr), 2)
         sl_bearish = round(close + (0.8 * atr), 2)
         
         return {
             "Symbol": symbol,
             "Close Price": round(close, 2),
-            "T+1 Bullish Target": round(target_bullish, 2),
+            "T+1 Bullish Target": target_bullish,
             "Bullish SL": sl_bullish,
-            "T+1 Bearish Target": round(target_bearish, 2),
+            "T+1 Bearish Target": target_bearish,
             "Bearish SL": sl_bearish,
             "Tomorrow CPR (BC-TC)": f"{cpr['BC']} - {cpr['TC']}",
             "R1 / S1 Boundary": f"{cpr['R1']} / {cpr['S1']}",
@@ -75,31 +75,39 @@ class T1TargetEngine:
         open_price = df_today["Open"].iloc[0]
         last = df_today.iloc[-1]
         c_live = last["Close"]
-        vwap = last.get("VWAP", c_live)
-        rvol = last.get("RVOL", 1.0)
+        
+        # Calculate dynamic typical price VWAP if VWAP column is absent
+        if "VWAP" in last and not pd.isna(last["VWAP"]):
+            vwap = last["VWAP"]
+        else:
+            vwap = (df_today["High"] + df_today["Low"] + df_today["Close"]).mean()
 
         target_bull = t1_target["T+1 Bullish Target"]
         target_bear = t1_target["T+1 Bearish Target"]
         sl_bull = t1_target["Bullish SL"]
         sl_bear = t1_target["Bearish SL"]
 
+        # 1. True Gap Exhaustion (Only if open opened above projected 1.2x ATR target)
         if open_price >= target_bull:
             t1_target["Live Action"] = "⚠️ GAP EXHAUSTED (OVERTARGET)"
             t1_target["Signal Quality"] = "INVALID ❌"
             return t1_target
 
-        if c_live > open_price and c_live > vwap and nifty_change_pct >= -0.3:
+        # 2. Live Bullish Trigger
+        if c_live >= open_price and c_live >= vwap and nifty_change_pct >= -0.5:
             if c_live < target_bull and c_live > sl_bull:
                 t1_target["Live Action"] = "🔥 LIVE BULLISH ENTRY"
                 t1_target["Signal Quality"] = "HIGH CONVICTION 🟢"
                 return t1_target
 
-        if c_live < open_price and c_live < vwap and nifty_change_pct <= 0.3:
+        # 3. Live Bearish Trigger
+        if c_live <= open_price and c_live <= vwap and nifty_change_pct <= 0.5:
             if c_live > target_bear and c_live < sl_bear:
                 t1_target["Live Action"] = "🩸 LIVE BEARISH ENTRY"
                 t1_target["Signal Quality"] = "HIGH CONVICTION 🔴"
                 return t1_target
 
+        # 4. Stop Loss Invalidation / Default
         if c_live <= sl_bull and c_live >= sl_bear:
             t1_target["Live Action"] = "🛑 STOP LOSS INVALIDATED"
             t1_target["Signal Quality"] = "EXIT ❌"
