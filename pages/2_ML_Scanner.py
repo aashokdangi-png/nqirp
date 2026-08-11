@@ -153,21 +153,23 @@ if st.button("🚀 Run Diagnostic Scan", type="primary"):
                     'Market_Sentiment': market_sentiment
                 }
 
-                X_df = pd.DataFrame([{f: feature_dict.get(f, 0) for f in expected_features}])
+               # 1. Create base DataFrame with explicit feature headers
+X_df = pd.DataFrame([{f: feature_dict.get(f, 0) for f in expected_features}])
 
-                # CRITICAL TEST: Bypass scaler if scaler is crushing values to flat probabilities
-                try:
-                    if scaler is not None:
-                        X_scaled = scaler.transform(X_df)
-                    else:
-                        X_scaled = X_df
-                except Exception:
-                    X_scaled = X_df  # Fallback if scaler column names mismatch
+# 2. Scale features WHILE preserving column headers so the model maps them correctly
+if scaler is not None:
+    scaled_array = scaler.transform(X_df)
+    X_inference = pd.DataFrame(scaled_array, columns=expected_features)
+else:
+    X_inference = X_df
 
-                if hasattr(model, "predict_proba"):
-                    prob = float(model.predict_proba(X_scaled)[0][1])
-                else:
-                    prob = float(model.predict(X_scaled)[0])
+# 3. Feed the properly labelled DataFrame into the model
+if hasattr(model, "predict_proba"):
+    prob = float(model.predict_proba(X_inference)[0][1])
+else:
+    prob = float(model.predict(X_inference)[0])
+
+score_pct = prob * 100 if prob <= 1.0 else prob
 
                 score_pct = prob * 100 if prob <= 1.0 else prob
 
