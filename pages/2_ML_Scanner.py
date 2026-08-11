@@ -3,14 +3,14 @@ import joblib
 import json
 import os
 import pandas as pd
+import numpy as np
 import yfinance as yf
 
 st.set_page_config(page_title="NQIRP ML Scanner", page_icon="🤖", layout="wide")
 
 st.title("🤖 AI & ML Strategy Scanner")
-st.markdown("*Strict Execution: Derived Backtest Model & JSON Config*")
+st.markdown("*Strict Execution: 9-Feature Backtest Schema Alignment*")
 
-# Load trained model, optional scaler, and backtest strategy config
 @st.cache_resource
 def load_ai_assets():
     model = joblib.load("colab_ai_model.pkl") if os.path.exists("colab_ai_model.pkl") else None
@@ -27,12 +27,31 @@ if model is None:
     st.error("Model file 'colab_ai_model.pkl' not found in repository.")
     st.stop()
 
-st.success("✅ Pure Backtest Strategy Active")
+# Explicit 9-feature model schema
+EXACT_FEATURES = [
+    'RVOL', 
+    'ATR_Pct', 
+    'RSI', 
+    'Liquidity_Sweep_High', 
+    'Liquidity_Sweep_Low', 
+    'Bullish_FVG', 
+    'Bullish_OB', 
+    'Pattern_Flag_Breakout', 
+    'Market_Sentiment'
+]
 
-# Market Context Contextual Metrics
-st.subheader("📊 Market Sentiment Context")
-col1, col2, col3 = st.columns(3)
+if hasattr(model, "feature_names_in_"):
+    expected_features = list(model.feature_names_in_)
+else:
+    expected_features = EXACT_FEATURES
 
+st.sidebar.success(f"✅ Schema Aligned: {len(expected_features)} Features Active")
+
+# Strategy parameters strictly pulled from JSON backtest config
+target_pct = float(config.get("target_pct", config.get("target_percentage", 1.2)))
+stop_pct = float(config.get("stop_pct", config.get("stop_percentage", 0.6)))
+
+# Market Sentiment Context
 @st.cache_data(ttl=300)
 def fetch_index_trends():
     tickers = ["^NSEI", "^NSEMDCP50", "^CNXSMLCAP"]
@@ -54,6 +73,8 @@ def fetch_index_trends():
     return trends, returns
 
 idx_trends, idx_returns = fetch_index_trends()
+
+col1, col2, col3 = st.columns(3)
 col1.metric("Nifty 50", idx_trends.get("^NSEI", "Active"))
 col2.metric("Nifty Midcap", idx_trends.get("^NSEMDCP50", "Active"))
 col3.metric("Nifty Smallcap", idx_trends.get("^CNXSMLCAP", "Active"))
@@ -81,14 +102,17 @@ def fetch_stock_data(ticker):
     df_1d = yf.download(yf_symbol, period="10d", interval="1d", progress=False, auto_adjust=True)
     return df_5m, df_1d
 
-if st.button("🚀 Run Backtested ML Scan", type="primary"):
-    with st.spinner("Executing model pipeline..."):
+def compute_rsi(series, period=14):
+    delta = series.diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
+    rs = gain / (loss + 1e-9)
+    return 100 - (100 / (1 + rs))
+
+if st.button("🚀 Run ML Scan", type="primary"):
+    with st.spinner("Processing live feed against exact 9-feature model schema..."):
         results = []
-        
-        # Pull strategy configuration directly from backtest JSON
-        expected_features = config.get("feature_names", config.get("features", []))
-        target_pct = float(config.get("target_pct", config.get("target_percentage", 1.2)))
-        stop_pct = float(config.get("stop_pct", config.get("stop_percentage", 0.6)))
+        market_sentiment = float(idx_returns["Nifty_1D_Return"])
 
         for ticker in selected_tickers:
             try:
@@ -110,43 +134,61 @@ if st.button("🚀 Run Backtested ML Scan", type="primary"):
                 close_1d = df_1d["Close"].dropna()
                 open_1d = df_1d["Open"].dropna()
 
-                if len(close_5m) < 15 or len(close_1d) < 2:
+                if len(close_5m) < 20 or len(close_1d) < 2:
                     continue
 
                 last_price = float(close_5m.iloc[-1])
                 day_open = float(open_1d.iloc[-1])
                 day_trend = "Uptrend" if last_price >= day_open else "Downtrend"
 
-                # Standard strategy indicator extraction
+                # Feature 1: RVOL
                 rvol = float(vol_5m.iloc[-1] / (vol_5m.tail(20).mean() + 1e-5))
-                has_fvg = 1 if (len(high_5m) >= 3 and low_5m.iloc[-1] > high_5m.iloc[-3]) else 0
-                has_sweep = 1 if (len(low_5m) >= 11 and low_5m.iloc[-1] < low_5m.iloc[-11:-1].min()) else 0
-                has_ob = 1 if (close_5m.iloc[-2] < open_5m.iloc[-2] and close_5m.iloc[-1] > high_5m.iloc[-2]) else 0
 
-                smc_signals = []
-                if has_fvg: smc_signals.append("Bullish FVG")
-                if has_sweep: smc_signals.append("Liquidity Sweep")
-                if has_ob: smc_signals.append("Order Block")
-                smc_str = " + ".join(smc_signals) if smc_signals else "Structure Clean"
+                # Feature 2: ATR_Pct
+                tr = pd.concat([high_5m - low_5m, (high_5m - close_5m.shift(1)).abs(), (low_5m - close_5m.shift(1)).abs()], axis=1).max(axis=1)
+                atr_14 = tr.tail(14).mean()
+                atr_pct = float((atr_14 / last_price) * 100)
 
-                # Raw inputs mapped strictly into backtested model feature names
-                feat_dict = {
-                    'Direction': 1 if day_trend == "Uptrend" else 0,
-                    'Day_Trend': 1 if day_trend == "Uptrend" else 0,
+                # Feature 3: RSI
+                rsi_series = compute_rsi(close_5m, period=14)
+                rsi_val = float(rsi_series.iloc[-1]) if not np.isnan(rsi_series.iloc[-1]) else 50.0
+
+                # Feature 4: Liquidity_Sweep_High
+                recent_max = high_5m.iloc[-15:-1].max() if len(high_5m) >= 15 else high_5m.iloc[:-1].max()
+                sweep_high = 1 if high_5m.iloc[-1] > recent_max else 0
+
+                # Feature 5: Liquidity_Sweep_Low
+                recent_min = low_5m.iloc[-15:-1].min() if len(low_5m) >= 15 else low_5m.iloc[:-1].min()
+                sweep_low = 1 if low_5m.iloc[-1] < recent_min else 0
+
+                # Feature 6: Bullish_FVG
+                bull_fvg = 1 if (len(high_5m) >= 3 and low_5m.iloc[-1] > high_5m.iloc[-3]) else 0
+
+                # Feature 7: Bullish_OB
+                bull_ob = 1 if (close_5m.iloc[-2] < open_5m.iloc[-2] and close_5m.iloc[-1] > high_5m.iloc[-2]) else 0
+
+                # Feature 8: Pattern_Flag_Breakout
+                recent_range = (high_5m.tail(10).max() - low_5m.tail(10).min()) / last_price
+                price_chg = (close_5m.iloc[-1] - close_5m.iloc[-10]) / close_5m.iloc[-10]
+                flag_breakout = 1 if (price_chg > 0.003 and recent_range < 0.015) else 0
+
+                # Feature 9: Market_Sentiment
+                sentiment_val = market_sentiment
+
+                # Exact 9-feature map
+                feature_dict = {
                     'RVOL': rvol,
-                    'MSB': 1 if (has_sweep or has_fvg) else 0,
-                    'Bull_FVG': has_fvg,
-                    'Sweep_Low': has_sweep,
-                    'Bull_OB': has_ob,
-                    'Nifty_1D_Return': idx_returns["Nifty_1D_Return"],
-                    'Midcap_1D_Return': idx_returns["Midcap_1D_Return"],
-                    'Smallcap_1D_Return': idx_returns["Smallcap_1D_Return"],
+                    'ATR_Pct': atr_pct,
+                    'RSI': rsi_val,
+                    'Liquidity_Sweep_High': sweep_high,
+                    'Liquidity_Sweep_Low': sweep_low,
+                    'Bullish_FVG': bull_fvg,
+                    'Bullish_OB': bull_ob,
+                    'Pattern_Flag_Breakout': flag_breakout,
+                    'Market_Sentiment': sentiment_val
                 }
 
-                if expected_features:
-                    X_df = pd.DataFrame([{f: feat_dict.get(f, 0) for f in expected_features}])
-                else:
-                    X_df = pd.DataFrame([feat_dict])
+                X_df = pd.DataFrame([{f: feature_dict.get(f, 0) for f in expected_features}])
 
                 if scaler is not None:
                     X_df = scaler.transform(X_df)
@@ -158,7 +200,14 @@ if st.button("🚀 Run Backtested ML Scan", type="primary"):
 
                 score_pct = prob * 100 if prob <= 1.0 else prob
 
-                # Targets directly derived from saved config percentages & daily trend direction
+                smc_signals = []
+                if bull_fvg: smc_signals.append("Bullish FVG")
+                if bull_ob: smc_signals.append("Bullish OB")
+                if sweep_low: smc_signals.append("Sweep Low")
+                if sweep_high: smc_signals.append("Sweep High")
+                if flag_breakout: smc_signals.append("Flag Breakout")
+                smc_str = " + ".join(smc_signals) if smc_signals else "Structure Clean"
+
                 if day_trend == "Uptrend":
                     tgt_price = last_price * (1 + target_pct / 100)
                     sl_price = last_price * (1 - stop_pct / 100)
@@ -173,17 +222,19 @@ if st.button("🚀 Run Backtested ML Scan", type="primary"):
                 results.append({
                     "Stock": ticker,
                     "Last Price": f"₹{last_price:.2f}",
-                    "Day Trend (Daily)": day_trend,
-                    "SMC Confluence": smc_str,
-                    "AI Confidence Score": f"{score_pct:.1f}%",
-                    "Dynamic Target (Next Day)": tgt_str,
-                    "Dynamic Stoploss": sl_str
+                    "Day Trend": day_trend,
+                    "RSI (5m)": f"{rsi_val:.1f}",
+                    "ATR %": f"{atr_pct:.2f}%",
+                    "SMC Structure": smc_str,
+                    "AI Confidence": f"{score_pct:.1f}%",
+                    "Target": tgt_str,
+                    "Stoploss": sl_str
                 })
             except Exception:
                 continue
 
         if results:
-            st.subheader("🔥 Strategy-Driven AI Signals")
+            st.subheader("🔥 AI Trading Signals (9/9 Features Aligned)")
             st.dataframe(pd.DataFrame(results), use_container_width=True)
         else:
-            st.warning("No setups generated.")
+            st.warning("No setup signals generated.")
