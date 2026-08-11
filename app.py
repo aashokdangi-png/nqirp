@@ -56,6 +56,13 @@ UPSTOX_ISIN_MAP = {
     "COALINDIA": "NSE_EQ|INE522F01014",
     "M&M": "NSE_EQ|INE101A01026",
 }
+NIFTY_MIDCAP_100 = [
+    "PERSISTENT.NS", "COFORGE.NS", "MPHASIS.NS", "DIXON.NS", "POLYCAB.NS",
+    "KEI.NS", "ASTRAL.NS", "VOLTAS.NS", "BHARATFORG.NS", "CUMMINSIND.NS",
+    "FEDERALBNK.NS", "IDFCFIRSTB.NS", "AUBANK.NS", "BANDHANBNK.NS", "LUPIN.NS",
+    "AARTIIND.NS", "DEEPAKNTR.NS", "ESCORTS.NS", "ASHOKLEY.NS", "BALKRISIND.NS",
+    "TATACOMM.NS", "MAXHEALTH.NS", "APOLLOTYRE.NS", "GODREJPROP.NS", "GLENMARK.NS"
+]
 
 
 def load_config(mode="intraday") -> dict:
@@ -751,15 +758,21 @@ else:
 
 universe = st.sidebar.selectbox(
     "Select Watchlist",
-    ["Default Watchlist (7 Stocks)", "NIFTY 50 Expanded", "Custom Tickers"],
+    ["NIFTY 50 Expanded", "NIFTY Midcap 100"]
 )
-if universe == "Default Watchlist (7 Stocks)":
-    symbols = ["RELIANCE", "TCS", "INFY", "HDFCBANK", "ICICIBANK", "REDINGTON", "FIRSTSOURCE"]
-elif universe == "NIFTY 50 Expanded":
-    symbols = ["RELIANCE", "TCS", "INFY", "HDFCBANK", "ICICIBANK", "SBIN", "BHARTIARTL", "ITC", "LT", "AXISBANK"]
+
+if universe == "NIFTY Midcap 100":
+    symbols = [
+        "PERSISTENT", "COFORGE", "MPHASIS", "DIXON", "POLYCAB",
+        "KEI", "ASTRAL", "VOLTAS", "BHARATFORG", "CUMMINSIND",
+        "FEDERALBNK", "IDFCFIRSTB", "AUBANK", "BANDHANBNK", "LUPIN",
+        "AARTIIND", "DEEPAKNTR", "ESCORTS", "ASHOKLEY", "BALKRISIND"
+    ]
 else:
-    custom_in = st.sidebar.text_input("Enter Tickers (comma separated)", "RELIANCE, TCS, INFY")
-    symbols = [s.strip().upper() for s in custom_in.split(",") if s.strip()]
+    symbols = [
+        "RELIANCE", "TCS", "INFY", "HDFCBANK", "ICICIBANK",
+        "SBIN", "BHARTIARTL", "ITC", "LT", "AXISBANK"
+    ]
 
 intra_cfg = load_config("intraday")
 swing_cfg = load_config("swing")
