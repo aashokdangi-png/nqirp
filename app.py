@@ -852,7 +852,7 @@ if page == "⚡ Multi-Tab Live Scanner":
                 evaluated_results = []
                 for sym in symbols:
                     df_daily = fetch_live_data(sym, period="3mo", interval="1d")
-                    df_5m = fetch_live_data(sym, period="1d", interval="5m")
+                    df_5m = fetch_live_data(sym, period="5d", interval="5m")
 
                     if not df_daily.empty:
                         base_t1 = T1TargetEngine.generate_t1_targets(df_daily, sym)
