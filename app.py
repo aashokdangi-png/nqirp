@@ -13,7 +13,9 @@ from sklearn.ensemble import RandomForestClassifier
 from t1_target_engine import T1TargetEngine
 
 st.set_page_config(
-    page_title="NQIRP Institutional Quant Engine", page_icon="⚡", layout="wide"
+    page_title="NQIRP Institutional Quant Engine",
+    page_icon="⚡",
+    layout="wide"
 )
 
 INTRADAY_CFG = "intraday_config.json"
