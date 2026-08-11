@@ -17,7 +17,6 @@ st.set_page_config(
     page_icon="⚡",
     layout="wide"
 )
-
 INTRADAY_CFG = "intraday_config.json"
 SWING_CFG = "swing_config.json"
 INTRADAY_MODEL = "intraday_ml_model.pkl"
