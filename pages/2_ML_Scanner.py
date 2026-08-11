@@ -200,9 +200,8 @@ if st.button("🚀 Run ML Scan", type="primary"):
                 if hasattr(model, "predict_proba"):
                     raw_probs = model.predict_proba(X_inference)[0]
                     prob = float(raw_probs[1])
-                    # Guard clause: if model classes are inversely mapped, correct the probability mapping
                     if prob < 0.3 and (bull_fvg or bull_ob or flag_breakout):
-                        prob = float(raw_probs[0]) # Invert if strong confluences map to class 0
+                        prob = float(raw_probs[0])
                 else:
                     prob = float(model.predict(X_inference)[0])
 
