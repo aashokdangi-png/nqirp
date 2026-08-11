@@ -99,7 +99,6 @@ else:
 
 # 3. Dual Data Fetching (Upstox Primary, YFinance Fallback)
 def fetch_stock_data(ticker):
-    # Try Upstox Session First
     if "upstox_client" in st.session_state and st.session_state.get("upstox_client"):
         try:
             upstox = st.session_state["upstox_client"]
@@ -110,7 +109,6 @@ def fetch_stock_data(ticker):
         except Exception:
             pass
     
-    # YFinance Fallback (1mo required for 14-day Daily ATR)
     yf_symbol = f"{ticker}.NS" if not ticker.endswith(".NS") else ticker
     df_5m = yf.download(yf_symbol, period="5d", interval="5m", progress=False, auto_adjust=True)
     df_1d = yf.download(yf_symbol, period="1mo", interval="1d", progress=False, auto_adjust=True)
@@ -127,8 +125,9 @@ def compute_rsi(series, period=14):
 if st.button("🚀 Run ML Scan", type="primary"):
     with st.spinner("Fetching data and running pure ML inference..."):
         results = []
-        # Sentiment scaled to percentage to match model training scales
-        market_sentiment = float(idx_returns.get("Nifty_1D_Return", 0.0))
+        
+        # RESTORED: * 100 multiplier to scale sentiment for the ML model properly
+        market_sentiment = float(idx_returns.get("Nifty_1D_Return", 0.0)) * 100
 
         for ticker in selected_tickers:
             try:
@@ -162,7 +161,7 @@ if st.button("🚀 Run ML Scan", type="primary"):
                 # Feature 1: RVOL (5m)
                 rvol = float(vol_5m.iloc[-1] / (vol_5m.tail(20).mean() + 1e-5))
 
-                # Feature 2: ATR_Pct (Daily timeframe correction applied here)
+                # Feature 2: ATR_Pct (Daily timeframe)
                 tr_1d = pd.concat([
                     high_1d - low_1d, 
                     (high_1d - close_1d.shift(1)).abs(), 
@@ -170,7 +169,9 @@ if st.button("🚀 Run ML Scan", type="primary"):
                 ], axis=1).max(axis=1)
                 
                 atr_14 = tr_1d.tail(14).mean()
-                atr_pct = float(atr_14 / last_price)
+                
+                # RESTORED: * 100 multiplier! This turns 0.02 into 2.0%, aligning with ML Model Scales.
+                atr_pct = float((atr_14 / last_price) * 100)
 
                 # Feature 3: RSI (5m)
                 rsi_series = compute_rsi(close_5m, period=14)
@@ -248,7 +249,7 @@ if st.button("🚀 Run ML Scan", type="primary"):
                     "Stock": ticker,
                     "Last Price": f"₹{last_price:.2f}",
                     "Day Trend": day_trend,
-                    "Daily ATR %": f"{atr_pct:.2f}%",
+                    "Daily ATR %": f"{atr_pct:.2f}%", 
                     "RSI (5m)": f"{rsi_val:.1f}",
                     "SMC Structure": smc_str,
                     "AI Probability": f"{score_pct:.1f}%",
