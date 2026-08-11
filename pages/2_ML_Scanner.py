@@ -10,6 +10,7 @@ st.set_page_config(page_title="NQIRP ML Scanner", page_icon="🤖", layout="wide
 st.title("🤖 AI & ML Strategy Scanner")
 st.markdown("*1-Year Backtested Model | Smart Money Concepts & Dynamic Targets*")
 
+# Load trained model and backtest configuration
 @st.cache_resource
 def load_ai_assets():
     model = joblib.load("colab_ai_model.pkl") if os.path.exists("colab_ai_model.pkl") else None
@@ -25,7 +26,7 @@ if model is None:
     st.error("Model file 'colab_ai_model.pkl' not found. Please verify repository uploads.")
     st.stop()
 
-st.success(f"✅ AI Model Active | Backtest Accuracy: {config.get('accuracy', config.get('accuracy_score', '88.5%'))}")
+st.success("✅ Backtested AI Model & Config Active")
 
 # Market Context
 st.subheader("📊 Market Sentiment & Sector Context")
@@ -101,8 +102,10 @@ if st.button("🚀 Run Instant ML Scan", type="primary"):
     with st.spinner("Processing live market feed against backtested model parameters..."):
         results = []
         
-        # Dynamically extract expected feature names directly from backtest JSON
+        # Pull parameters generated strictly during backtesting in Colab
         expected_features = config.get("feature_names", config.get("features", []))
+        target_pct = float(config.get("target_pct", 1.2))
+        stop_pct = float(config.get("stop_pct", 0.6))
 
         for ticker in selected_tickers:
             try:
@@ -131,21 +134,10 @@ if st.button("🚀 Run Instant ML Scan", type="primary"):
                 day_open = float(open_1d.iloc[-1])
                 day_trend = "Uptrend" if last_price >= day_open else "Downtrend"
 
-                # Calculate live technical features
+                # Feature extraction matching backtest raw inputs
                 rvol = float(vol_5m.iloc[-1] / (vol_5m.tail(20).mean() + 1e-5))
-                
-                # Multi-candle SMC Fair Value Gap (FVG)
-                has_fvg = 0
-                for i in range(-5, -1):
-                    if abs(i-2) <= len(high_5m) and low_5m.iloc[i] > high_5m.iloc[i-2]:
-                        has_fvg = 1
-                        break
-
-                # Multi-candle Liquidity Sweep
-                recent_min = low_5m.iloc[-15:-1].min() if len(low_5m) >= 15 else low_5m.iloc[:-1].min()
-                has_sweep = 1 if low_5m.iloc[-1] < recent_min else 0
-
-                # Order Block
+                has_fvg = 1 if (len(high_5m) >= 3 and low_5m.iloc[-1] > high_5m.iloc[-3]) else 0
+                has_sweep = 1 if (len(low_5m) >= 11 and low_5m.iloc[-1] < low_5m.iloc[-11:-1].min()) else 0
                 has_ob = 1 if (close_5m.iloc[-2] < open_5m.iloc[-2] and close_5m.iloc[-1] > high_5m.iloc[-2]) else 0
 
                 smc_signals = []
@@ -154,18 +146,7 @@ if st.button("🚀 Run Instant ML Scan", type="primary"):
                 if has_ob: smc_signals.append("Order Block")
                 smc_str = " + ".join(smc_signals) if smc_signals else "Structure Clean"
 
-                # Dynamic Chart Formation Classification
-                recent_range = (high_5m.tail(10).max() - low_5m.tail(10).min()) / last_price
-                price_change = (close_5m.iloc[-1] - close_5m.iloc[-10]) / close_5m.iloc[-10]
-
-                if price_change > 0.005 and recent_range < 0.015:
-                    chart_pattern = "Flag Breakout"
-                elif recent_range < 0.008:
-                    chart_pattern = "Triangle Consolidation"
-                else:
-                    chart_pattern = "Uptrend Continuation" if day_trend == "Uptrend" else "Downtrend Continuation"
-
-                # Feature dictionary matching backtesting schema
+                # Feature vector formatted for trained model
                 feat_dict = {
                     'Direction': 1 if day_trend == "Uptrend" else 0,
                     'Day_Trend': 1 if day_trend == "Uptrend" else 0,
@@ -174,32 +155,23 @@ if st.button("🚀 Run Instant ML Scan", type="primary"):
                     'Bull_FVG': has_fvg,
                     'Sweep_Low': has_sweep,
                     'Bull_OB': has_ob,
-                    'Flag_Breakout': 1 if chart_pattern == "Flag Breakout" else 0,
-                    'Triangle_Breakout': 1 if chart_pattern == "Triangle Consolidation" else 0,
                     'Nifty_1D_Return': idx_returns["Nifty_1D_Return"],
                     'Midcap_1D_Return': idx_returns["Midcap_1D_Return"],
                     'Smallcap_1D_Return': idx_returns["Smallcap_1D_Return"],
-                    'Bank_1D_Return': idx_returns["Nifty_1D_Return"],
-                    'Reward_To_Risk': config.get("reward_to_risk", 2.0)
                 }
 
-                # Construct feature DataFrame using exact backtested columns
                 if expected_features:
                     X_df = pd.DataFrame([{f: feat_dict.get(f, 0) for f in expected_features}])
                 else:
                     X_df = pd.DataFrame([feat_dict])
 
-                # Model probability prediction
+                # Pure inference from backtested model
                 if hasattr(model, "predict_proba"):
                     prob = float(model.predict_proba(X_df)[0][1])
                 else:
                     prob = float(model.predict(X_df)[0])
 
-                # Volatility-based dynamic target calculation
-                stock_volatility = float(close_5m.pct_change().std() * 100 * 2.5) if len(close_5m) >= 5 else 1.8
-                target_pct = max(1.2, min(4.5, stock_volatility))
-                stop_pct = target_pct / config.get("reward_to_risk", 2.0)
-
+                # Calculate targets strictly using saved config percentages and price direction
                 if day_trend == "Uptrend":
                     tgt_price = last_price * (1 + target_pct / 100)
                     sl_price = last_price * (1 - stop_pct / 100)
@@ -216,7 +188,6 @@ if st.button("🚀 Run Instant ML Scan", type="primary"):
                     "Last Price": f"₹{last_price:.2f}",
                     "Day Trend (Daily)": day_trend,
                     "SMC Confluence": smc_str,
-                    "Chart Formation": chart_pattern,
                     "AI Confidence Score": f"{prob * 100:.1f}%" if prob <= 1.0 else f"{prob:.1f}%",
                     "Dynamic Target (Next Day)": tgt_str,
                     "Dynamic Stoploss": sl_str
