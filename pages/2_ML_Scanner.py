@@ -191,4 +191,3 @@ if st.button("🚀 Run Instant ML Scan", type="primary"):
             st.dataframe(pd.DataFrame(results), use_container_width=True)
         else:
             st.warning("No setup signals triggered for current market conditions.")
-            
