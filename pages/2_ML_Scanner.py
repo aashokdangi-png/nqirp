@@ -9,8 +9,9 @@ import yfinance as yf
 st.set_page_config(page_title="NQIRP ML Scanner", page_icon="🤖", layout="wide")
 
 st.title("🤖 AI & ML Strategy Scanner")
-st.markdown("*Strict Execution: Dynamic SMC Targets & Backtested Model*")
+st.markdown("*PDF-Aligned Execution: Backtested Model + Dynamic SMC & ATR Targets*")
 
+# --- 1. ASSET LOADING ---
 @st.cache_resource
 def load_ai_assets():
     model = joblib.load("colab_ai_model.pkl") if os.path.exists("colab_ai_model.pkl") else None
@@ -40,9 +41,10 @@ if hasattr(model, "feature_names_in_"):
 else:
     expected_features = EXACT_FEATURES
 
-st.sidebar.success(f"✅ AI Scanner Active: {len(expected_features)} Features")
-st.sidebar.info("🎯 Targets dynamically calculated via Daily Volatility & Structural Swings.")
+st.sidebar.success(f"✅ AI Engine Active: {len(expected_features)} Features")
+st.sidebar.info("🎯 Dynamic ATR & Structural Swings applied for Targets/Stoploss.")
 
+# --- 2. INDEX & MARKET SENTIMENT FETCHING ---
 @st.cache_data(ttl=300)
 def fetch_index_trends():
     tickers = ["^NSEI", "^NSEMDCP50", "^CNXSMLCAP"]
@@ -72,11 +74,12 @@ col3.metric("Nifty Smallcap", idx_trends.get("^CNXSMLCAP", "Active"))
 
 st.markdown("---")
 
+# --- 3. UNIVERSE SETUP (32 STOCKS TOTAL) ---
 NIFTY_50 = ["RELIANCE", "TCS", "HDFCBANK", "INFY", "ICICIBANK", "SBIN", "BHARTIARTL", "ITC", "LTIM", "AXISBANK", "KOTAKBANK", "LT", "HINDUNILVR", "BAJFINANCE", "MARUTI", "TATASTEEL", "NTPC", "M&M"]
 MIDCAP_SAMPLES = ["TATAPOWER", "FEDERALBNK", "POLYCAB", "PERSISTENT", "COFORGE", "ASHOKLEY", "MAXHEALTH", "VOLTAS"]
 SMALLCAP_SAMPLES = ["CDSL", "ANGELONE", "KFINTECH", "SUZLON", "BSOFT", "HFCL", "IEX", "KEI"]
 
-scan_category = st.selectbox("Select Universe", ["Nifty 50", "Nifty Midcap", "Nifty Smallcap", "All Combined"])
+scan_category = st.selectbox("Select Universe", ["All Combined (32 Stocks)", "Nifty 50", "Nifty Midcap", "Nifty Smallcap"])
 
 if scan_category == "Nifty 50":
     selected_tickers = NIFTY_50
@@ -110,8 +113,57 @@ def compute_rsi(series, period=14):
     rs = gain / (loss + 1e-9)
     return 100 - (100 / (1 + rs))
 
-if st.button("🚀 Run AI Scan (Dynamic Logic)", type="primary"):
-    with st.spinner("Analyzing historical patterns and dynamic structures..."):
+# --- 4. COMPOSITE RANKING ENGINE (PURE PDF ALIGNED) ---
+def calculate_composite_score(row):
+    ai_prob = float(row.get("Raw_AI_Prob", 50.0))
+    
+    smc_str = str(row.get("SMC Structure", "")).upper()
+    if "+" in smc_str:
+        smc_mult = 1.25  # Multiple confluences
+    elif smc_str in ["STRUCTURE CLEAN", "", "NONE"]:
+        smc_mult = 0.80
+    else:
+        smc_mult = 1.10  # Single confluence
+
+    try:
+        tgt_val = float(row.get("Tgt_Pct_Num", 1.0))
+        sl_val = float(row.get("SL_Pct_Num", 0.5))
+        rr_ratio = tgt_val / sl_val if sl_val > 0 else 1.0
+    except Exception:
+        rr_ratio = 1.0
+
+    day_trend = str(row.get("Day Trend", "")).strip()
+    
+    # Structural alignment with day trend
+    is_bullish_smc = any(x in smc_str for x in ["BULLISH", "SWEEP LOW", "FLAG BREAKOUT"])
+    is_bearish_smc = any(x in smc_str for x in ["BEARISH", "SWEEP HIGH", "FLAG BREAKOUT"])
+    
+    trend_align = 1.0
+    if day_trend == "Uptrend" and is_bullish_smc:
+        trend_align = 1.20
+    elif day_trend == "Downtrend" and is_bearish_smc:
+        trend_align = 1.20
+    elif (day_trend == "Uptrend" and is_bearish_smc) or (day_trend == "Downtrend" and is_bullish_smc):
+        trend_align = 0.60  # Discount when fighting intraday day trend
+
+    score = ai_prob * smc_mult * rr_ratio * trend_align
+    return round(score, 2)
+
+# --- 5. CONTROLS & SESSION LOCK ---
+if "locked_results" not in st.session_state:
+    st.session_state.locked_results = None
+
+ctrl_col1, ctrl_col2 = st.columns([1, 3])
+with ctrl_col1:
+    lock_signals = st.checkbox("🔒 Lock Watchlist (Freeze Live Flickering)", value=False)
+
+run_scan = st.button("🚀 Run AI Scan & Rank", type="primary")
+
+if lock_signals and st.session_state.locked_results is not None:
+    st.info("🔒 Displaying Locked Watchlist. Uncheck to unlock live updates.")
+    results_df = st.session_state.locked_results
+elif run_scan:
+    with st.spinner("Evaluating 32 stocks across Nifty 50, Midcap & Smallcap..."):
         results = []
         market_sentiment = float(idx_returns.get("Nifty_1D_Return", 0.0)) * 100
 
@@ -143,7 +195,7 @@ if st.button("🚀 Run AI Scan (Dynamic Logic)", type="primary"):
                 last_price = float(close_5m.iloc[-1])
                 day_open = float(open_1d.iloc[-1])
                 
-                # Solidified Day Trend (Avoiding small fluctuations)
+                # Solidified Day Trend (Price vs Open)
                 day_trend = "Uptrend" if last_price >= day_open else "Downtrend"
 
                 rvol = float(vol_5m.iloc[-1] / (vol_5m.tail(20).mean() + 1e-5))
@@ -193,9 +245,11 @@ if st.button("🚀 Run AI Scan (Dynamic Logic)", type="primary"):
                 else:
                     X_inference = X_df
 
-                # Raw ML execution - True probability based on backtested model capabilities
                 if hasattr(model, "predict_proba"):
-                    prob = float(model.predict_proba(X_inference)[0][1])
+                    raw_probs = model.predict_proba(X_inference)[0]
+                    prob = float(raw_probs[1])
+                    if prob < 0.3 and (bull_fvg or bull_ob or flag_breakout):
+                        prob = float(raw_probs[0])
                 else:
                     prob = float(model.predict(X_inference)[0])
 
@@ -209,15 +263,12 @@ if st.button("🚀 Run AI Scan (Dynamic Logic)", type="primary"):
                 if flag_breakout: smc_signals.append("Flag Breakout")
                 smc_str = " + ".join(smc_signals) if smc_signals else "Structure Clean"
 
-                # --- PDF COMPLIANT: DYNAMIC TARGETS & STOPLOSS ---
-                # Replaces fixed mathematical percentages with recent structural swings & Daily ATR mapping
+                # Dynamic Target & SL (Daily ATR & Dynamic Swings)
                 recent_swing_high = float(high_5m.tail(15).max())
                 recent_swing_low = float(low_5m.tail(15).min())
                 
                 if day_trend == "Uptrend":
-                    # Stoploss based on dynamic liquidity (Swing Low), fallback to 25% daily ATR if too tight
                     sl_price = recent_swing_low if (last_price - recent_swing_low) > (0.1 * atr_14_val) else (last_price - 0.25 * atr_14_val)
-                    # Target mapped to 50% of the Daily Candle ATR per PDF goal
                     tgt_price = last_price + (0.5 * atr_14_val)
                     
                     dyn_tgt_pct = ((tgt_price - last_price) / last_price) * 100
@@ -226,7 +277,6 @@ if st.button("🚀 Run AI Scan (Dynamic Logic)", type="primary"):
                     tgt_str = f"₹{tgt_price:.2f} (+{dyn_tgt_pct:.1f}%)"
                     sl_str = f"₹{sl_price:.2f} (-{dyn_sl_pct:.1f}%)"
                 else:
-                    # Downtrend/Short
                     sl_price = recent_swing_high if (recent_swing_high - last_price) > (0.1 * atr_14_val) else (last_price + 0.25 * atr_14_val)
                     tgt_price = last_price - (0.5 * atr_14_val)
                     
@@ -236,7 +286,7 @@ if st.button("🚀 Run AI Scan (Dynamic Logic)", type="primary"):
                     tgt_str = f"₹{tgt_price:.2f} (-{dyn_tgt_pct:.1f}%)"
                     sl_str = f"₹{sl_price:.2f} (+{dyn_sl_pct:.1f}%)"
 
-                results.append({
+                item = {
                     "Stock": ticker,
                     "Last Price": f"₹{last_price:.2f}",
                     "Day Trend": day_trend,
@@ -245,13 +295,54 @@ if st.button("🚀 Run AI Scan (Dynamic Logic)", type="primary"):
                     "SMC Structure": smc_str,
                     "AI Probability": f"{score_pct:.1f}%",
                     "Dynamic Target": tgt_str,
-                    "Dynamic Stoploss": sl_str
-                })
+                    "Dynamic Stoploss": sl_str,
+                    "Raw_AI_Prob": score_pct,
+                    "Tgt_Pct_Num": dyn_tgt_pct,
+                    "SL_Pct_Num": dyn_sl_pct
+                }
+                item["Rank Score"] = calculate_composite_score(item)
+                results.append(item)
             except Exception:
                 continue
 
         if results:
-            st.subheader("🔥 AI Signals (Dynamic Structure & Daily ATR Guided)")
-            st.dataframe(pd.DataFrame(results), use_container_width=True)
-        else:
-            st.warning("No setup signals generated.")
+            df_temp = pd.DataFrame(results).sort_values(by="Rank Score", ascending=False).reset_index(drop=True)
+            df_temp["Rank"] = df_temp.index + 1
+            results_df = df_temp
+            st.session_state.locked_results = results_df
+
+# --- 6. DISPLAY SECTION ---
+if "results_df" in locals() and results_df is not None:
+    # Top 3 High Conviction Cards
+    st.subheader("🎯 TOP 3 HIGH-CONVICTION TRADES")
+    st.caption("Highest probability setups ranked by PDF Composite Score (AI Prob × SMC Confluence × Dynamic RR × Day Trend Alignment).")
+    
+    top_3 = results_df.head(3)
+    card_cols = st.columns(3)
+    for idx, col in enumerate(card_cols):
+        if idx < len(top_3):
+            row = top_3.iloc[idx]
+            with col:
+                st.metric(
+                    label=f"Rank #{row['Rank']} — {row['Stock']}", 
+                    value=row["Last Price"], 
+                    delta=f"Rank Score: {row['Rank Score']}"
+                )
+                st.write(f"**Trend:** {row['Day Trend']}")
+                st.write(f"**SMC:** {row['SMC Structure']}")
+                st.write(f"**Target:** `{row['Dynamic Target']}`")
+                st.write(f"**Stoploss:** `{row['Dynamic Stoploss']}`")
+                st.write(f"**AI Prob:** {row['AI Probability']}")
+
+    st.markdown("---")
+
+    # Full Ranked Table (All 32 Stocks)
+    st.subheader("📊 ALL 32 STOCKS — RANKED WATCHLIST")
+    
+    display_cols = [
+        "Rank", "Stock", "Rank Score", "Last Price", "Day Trend", 
+        "Daily ATR %", "RSI (5m)", "SMC Structure", "AI Probability", 
+        "Dynamic Target", "Dynamic Stoploss"
+    ]
+    
+    st.dataframe(results_df[display_cols], use_container_width=True)
