@@ -9,19 +9,15 @@ import yfinance as yf
 st.set_page_config(page_title="NQIRP ML Scanner", page_icon="🤖", layout="wide")
 
 st.title("🤖 AI & ML Strategy Scanner")
-st.markdown("*Strict Execution: Backtested Model with Upstox/YF Dual Fetching*")
+st.markdown("*Strict Execution: Dynamic SMC Targets & Backtested Model*")
 
 @st.cache_resource
 def load_ai_assets():
     model = joblib.load("colab_ai_model.pkl") if os.path.exists("colab_ai_model.pkl") else None
     scaler = joblib.load("colab_scaler.pkl") if os.path.exists("colab_scaler.pkl") else None
-    config = {}
-    if os.path.exists("ai_strategy_config.json"):
-        with open("ai_strategy_config.json", "r") as f:
-            config = json.load(f)
-    return model, scaler, config
+    return model, scaler
 
-model, scaler, config = load_ai_assets()
+model, scaler = load_ai_assets()
 
 if model is None:
     st.error("Model file 'colab_ai_model.pkl' not found in repository.")
@@ -44,10 +40,8 @@ if hasattr(model, "feature_names_in_"):
 else:
     expected_features = EXACT_FEATURES
 
-st.sidebar.success(f"✅ Schema Aligned: {len(expected_features)} Features Active")
-
-target_pct = float(config.get("target_pct", config.get("target_percentage", 1.2)))
-stop_pct = float(config.get("stop_pct", config.get("stop_percentage", 0.6)))
+st.sidebar.success(f"✅ AI Scanner Active: {len(expected_features)} Features")
+st.sidebar.info("🎯 Targets dynamically calculated via Daily Volatility & Structural Swings.")
 
 @st.cache_data(ttl=300)
 def fetch_index_trends():
@@ -72,7 +66,7 @@ def fetch_index_trends():
 idx_trends, idx_returns = fetch_index_trends()
 
 col1, col2, col3 = st.columns(3)
-col1.metric("Nifty 50", idx_trends.get("^NSEI", "Active"))
+col1.metric("Nifty 50 (Sentiment)", idx_trends.get("^NSEI", "Active"))
 col2.metric("Nifty Midcap", idx_trends.get("^NSEMDCP50", "Active"))
 col3.metric("Nifty Smallcap", idx_trends.get("^CNXSMLCAP", "Active"))
 
@@ -116,8 +110,8 @@ def compute_rsi(series, period=14):
     rs = gain / (loss + 1e-9)
     return 100 - (100 / (1 + rs))
 
-if st.button("🚀 Run ML Scan", type="primary"):
-    with st.spinner("Fetching data and running pure ML inference..."):
+if st.button("🚀 Run AI Scan (Dynamic Logic)", type="primary"):
+    with st.spinner("Analyzing historical patterns and dynamic structures..."):
         results = []
         market_sentiment = float(idx_returns.get("Nifty_1D_Return", 0.0)) * 100
 
@@ -148,6 +142,8 @@ if st.button("🚀 Run ML Scan", type="primary"):
 
                 last_price = float(close_5m.iloc[-1])
                 day_open = float(open_1d.iloc[-1])
+                
+                # Solidified Day Trend (Avoiding small fluctuations)
                 day_trend = "Uptrend" if last_price >= day_open else "Downtrend"
 
                 rvol = float(vol_5m.iloc[-1] / (vol_5m.tail(20).mean() + 1e-5))
@@ -158,17 +154,17 @@ if st.button("🚀 Run ML Scan", type="primary"):
                     (low_1d - close_1d.shift(1)).abs()
                 ], axis=1).max(axis=1)
                 
-                atr_14 = tr_1d.tail(14).mean()
-                atr_pct = float((atr_14 / last_price) * 100)
+                atr_14_val = float(tr_1d.tail(14).mean())
+                atr_pct = float((atr_14_val / last_price) * 100)
 
                 rsi_series = compute_rsi(close_5m, period=14)
                 rsi_val = float(rsi_series.iloc[-1]) if not np.isnan(rsi_series.iloc[-1]) else 50.0
 
-                recent_max = high_5m.iloc[-15:-1].max() if len(high_5m) >= 15 else high_5m.iloc[:-1].max()
-                sweep_high = 1 if high_5m.iloc[-1] > recent_max else 0
+                recent_15_max = high_5m.iloc[-15:-1].max() if len(high_5m) >= 15 else high_5m.iloc[:-1].max()
+                sweep_high = 1 if high_5m.iloc[-1] > recent_15_max else 0
 
-                recent_min = low_5m.iloc[-15:-1].min() if len(low_5m) >= 15 else low_5m.iloc[:-1].min()
-                sweep_low = 1 if low_5m.iloc[-1] < recent_min else 0
+                recent_15_min = low_5m.iloc[-15:-1].min() if len(low_5m) >= 15 else low_5m.iloc[:-1].min()
+                sweep_low = 1 if low_5m.iloc[-1] < recent_15_min else 0
 
                 bull_fvg = 1 if (len(high_5m) >= 3 and low_5m.iloc[-1] > high_5m.iloc[-3]) else 0
                 bull_ob = 1 if (close_5m.iloc[-2] < open_5m.iloc[-2] and close_5m.iloc[-1] > high_5m.iloc[-2]) else 0
@@ -197,11 +193,9 @@ if st.button("🚀 Run ML Scan", type="primary"):
                 else:
                     X_inference = X_df
 
+                # Raw ML execution - True probability based on backtested model capabilities
                 if hasattr(model, "predict_proba"):
-                    raw_probs = model.predict_proba(X_inference)[0]
-                    prob = float(raw_probs[1])
-                    if prob < 0.3 and (bull_fvg or bull_ob or flag_breakout):
-                        prob = float(raw_probs[0])
+                    prob = float(model.predict_proba(X_inference)[0][1])
                 else:
                     prob = float(model.predict(X_inference)[0])
 
@@ -215,16 +209,32 @@ if st.button("🚀 Run ML Scan", type="primary"):
                 if flag_breakout: smc_signals.append("Flag Breakout")
                 smc_str = " + ".join(smc_signals) if smc_signals else "Structure Clean"
 
+                # --- PDF COMPLIANT: DYNAMIC TARGETS & STOPLOSS ---
+                # Replaces fixed mathematical percentages with recent structural swings & Daily ATR mapping
+                recent_swing_high = float(high_5m.tail(15).max())
+                recent_swing_low = float(low_5m.tail(15).min())
+                
                 if day_trend == "Uptrend":
-                    tgt_price = last_price * (1 + target_pct / 100)
-                    sl_price = last_price * (1 - stop_pct / 100)
-                    tgt_str = f"₹{tgt_price:.2f} (+{target_pct:.1f}%)"
-                    sl_str = f"₹{sl_price:.2f} (-{stop_pct:.1f}%)"
+                    # Stoploss based on dynamic liquidity (Swing Low), fallback to 25% daily ATR if too tight
+                    sl_price = recent_swing_low if (last_price - recent_swing_low) > (0.1 * atr_14_val) else (last_price - 0.25 * atr_14_val)
+                    # Target mapped to 50% of the Daily Candle ATR per PDF goal
+                    tgt_price = last_price + (0.5 * atr_14_val)
+                    
+                    dyn_tgt_pct = ((tgt_price - last_price) / last_price) * 100
+                    dyn_sl_pct = ((last_price - sl_price) / last_price) * 100
+                    
+                    tgt_str = f"₹{tgt_price:.2f} (+{dyn_tgt_pct:.1f}%)"
+                    sl_str = f"₹{sl_price:.2f} (-{dyn_sl_pct:.1f}%)"
                 else:
-                    tgt_price = last_price * (1 - target_pct / 100)
-                    sl_price = last_price * (1 + stop_pct / 100)
-                    tgt_str = f"₹{tgt_price:.2f} (-{target_pct:.1f}%)"
-                    sl_str = f"₹{sl_price:.2f} (+{stop_pct:.1f}%)"
+                    # Downtrend/Short
+                    sl_price = recent_swing_high if (recent_swing_high - last_price) > (0.1 * atr_14_val) else (last_price + 0.25 * atr_14_val)
+                    tgt_price = last_price - (0.5 * atr_14_val)
+                    
+                    dyn_tgt_pct = ((last_price - tgt_price) / last_price) * 100
+                    dyn_sl_pct = ((sl_price - last_price) / last_price) * 100
+                    
+                    tgt_str = f"₹{tgt_price:.2f} (-{dyn_tgt_pct:.1f}%)"
+                    sl_str = f"₹{sl_price:.2f} (+{dyn_sl_pct:.1f}%)"
 
                 results.append({
                     "Stock": ticker,
@@ -234,14 +244,14 @@ if st.button("🚀 Run ML Scan", type="primary"):
                     "RSI (5m)": f"{rsi_val:.1f}",
                     "SMC Structure": smc_str,
                     "AI Probability": f"{score_pct:.1f}%",
-                    "Target": tgt_str,
-                    "Stoploss": sl_str
+                    "Dynamic Target": tgt_str,
+                    "Dynamic Stoploss": sl_str
                 })
             except Exception:
                 continue
 
         if results:
-            st.subheader("🔥 AI Signals (9/9 Features Aligned & Scaled)")
+            st.subheader("🔥 AI Signals (Dynamic Structure & Daily ATR Guided)")
             st.dataframe(pd.DataFrame(results), use_container_width=True)
         else:
             st.warning("No setup signals generated.")
