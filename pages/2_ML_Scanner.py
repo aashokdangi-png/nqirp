@@ -71,7 +71,12 @@ SECTOR_MAP = {
     "IEX.NS": {"symbol": "^CNXENERGY", "name": "NIFTY ENERGY"}
 }
 
-DEFAULT_WATCHLIST = list(SECTOR_MAP.keys())
+# Build Watchlist Options: Combined Watchlist + Sectors + Individual Stocks
+COMBINED_OPTION = "🌟 Combined Watchlist (All Stocks)"
+SECTOR_OPTIONS = [f"📁 Sector: {sec}" for sec in sorted(list(set(item["name"] for item in SECTOR_MAP.values())))]
+INDIVIDUAL_STOCK_OPTIONS = list(SECTOR_MAP.keys())
+
+ALL_WATCHLIST_OPTIONS = [COMBINED_OPTION] + SECTOR_OPTIONS + INDIVIDUAL_STOCK_OPTIONS
 
 # ==========================================
 # 2. MODEL & CONFIG LOADER
@@ -101,31 +106,38 @@ if model is None:
 # ==========================================
 @st.cache_data(ttl=60)
 def fetch_macro_and_sector_performance():
-    tickers = {
-        "NIFTY 50": "^NSEI",
-        "NIFTY MIDCAP": "^CNXMID",
-        "NIFTY SMALLCAP": "^CNXSML",
-        "NIFTY BANK": "^NSEBANK",
-        "NIFTY IT": "^CNXIT",
-        "NIFTY FMCG": "^CNXFMCG",
-        "NIFTY AUTO": "^CNXAUTO",
-        "NIFTY METAL": "^CNXMETAL",
-        "NIFTY PHARMA": "^CNXPHARMA",
-        "NIFTY ENERGY": "^CNXENERGY",
-        "NIFTY INFRA": "^CNXINFRA"
+    # Candidates list ensures Midcap and Smallcap return actual live % changes
+    index_ticker_candidates = {
+        "NIFTY 50": ["^NSEI"],
+        "NIFTY MIDCAP": ["^NSEMDCP50", "^CNXMID", "NIFTYMIDCAP150.NS"],
+        "NIFTY SMALLCAP": ["NIFTYSMLECP100.NS", "^CNXSML", "^BSESML"],
+        "NIFTY BANK": ["^NSEBANK"],
+        "NIFTY IT": ["^CNXIT"],
+        "NIFTY FMCG": ["^CNXFMCG"],
+        "NIFTY AUTO": ["^CNXAUTO"],
+        "NIFTY METAL": ["^CNXMETAL"],
+        "NIFTY PHARMA": ["^CNXPHARMA"],
+        "NIFTY ENERGY": ["^CNXENERGY"],
+        "NIFTY INFRA": ["^CNXINFRA"]
     }
     
     results = {}
-    for name, symbol in tickers.items():
-        try:
-            df = yf.Ticker(symbol).history(period="2d")
-            if len(df) >= 2:
-                pct_change = ((df['Close'].iloc[-1] - df['Close'].iloc[-2]) / df['Close'].iloc[-2]) * 100
-                results[name] = {"symbol": symbol, "return": round(pct_change, 2)}
-            else:
-                results[name] = {"symbol": symbol, "return": 0.0}
-        except Exception:
-            results[name] = {"symbol": symbol, "return": 0.0}
+    for name, candidates in index_ticker_candidates.items():
+        pct_change = 0.0
+        used_symbol = candidates[0]
+        
+        for symbol in candidates:
+            try:
+                df = yf.Ticker(symbol).history(period="5d")
+                if len(df) >= 2:
+                    pct_change = ((df['Close'].iloc[-1] - df['Close'].iloc[-2]) / df['Close'].iloc[-2]) * 100
+                    used_symbol = symbol
+                    if abs(pct_change) > 0.0001:  # Valid non-zero data retrieved
+                        break
+            except Exception:
+                continue
+                
+        results[name] = {"symbol": used_symbol, "return": round(pct_change, 2)}
             
     return results
 
@@ -140,8 +152,8 @@ mid_ret = macro_sectors.get("NIFTY MIDCAP", {}).get("return", 0.0)
 sml_ret = macro_sectors.get("NIFTY SMALLCAP", {}).get("return", 0.0)
 
 mcol1.metric("NIFTY 50 (^NSEI)", f"{n50_ret}%", delta=f"{n50_ret}%")
-mcol2.metric("NIFTY MIDCAP (^CNXMID)", f"{mid_ret}%", delta=f"{mid_ret}%")
-mcol3.metric("NIFTY SMALLCAP (^CNXSML)", f"{sml_ret}%", delta=f"{sml_ret}%")
+mcol2.metric("NIFTY MIDCAP", f"{mid_ret}%", delta=f"{mid_ret}%")
+mcol3.metric("NIFTY SMALLCAP", f"{sml_ret}%", delta=f"{sml_ret}%")
 
 # Find Top Performing Sector
 sector_only = {k: v['return'] for k, v in macro_sectors.items() if k not in ["NIFTY 50", "NIFTY MIDCAP", "NIFTY SMALLCAP"]}
@@ -152,12 +164,8 @@ mcol4.metric("TOP SECTOR TODAY", top_sector, delta=f"{sector_only.get(top_sector
 # 4. CONTEMPORARY SMC & PATTERN SCANNER
 # ==========================================
 def scan_stock_metrics(ticker_symbol, sector_data):
-    # Fetch 1-year historical context + recent 5-min intraday
     stock = yf.Ticker(ticker_symbol)
-    
-    # 5-min candles for intraday SMC & Patterns
     df_5m = stock.history(period="5d", interval="5m")
-    # Daily candles for long-term day trend bias & targets
     df_1d = stock.history(period="1y", interval="1d")
     
     if df_5m.empty or len(df_5m) < 20:
@@ -165,45 +173,42 @@ def scan_stock_metrics(ticker_symbol, sector_data):
         
     last_price = round(df_5m['Close'].iloc[-1], 2)
     
-    # 1. Non-fluctuating Day Trend (EMA 50 on Daily vs Close)
+    # 1. Non-fluctuating Day Trend
     daily_ema50 = df_1d['Close'].ewm(span=50).mean().iloc[-1]
     day_trend = "Uptrend" if last_price >= daily_ema50 else "Downtrend"
     
-    # 2. Smart Money Concepts (FVG, Order Blocks, Liquidity Sweeps)
+    # 2. Smart Money Concepts
     c1_high = df_5m['High'].iloc[-3]
     c3_low = df_5m['Low'].iloc[-1]
     bull_fvg = c3_low > c1_high
     
     prior_low = df_5m['Low'].iloc[-11:-1].min()
     sweep_low = (df_5m['Low'].iloc[-1] < prior_low) and (df_5m['Close'].iloc[-1] > prior_low)
-    
     bull_ob = (df_5m['Close'].iloc[-2] < df_5m['Open'].iloc[-2]) and (df_5m['Close'].iloc[-1] > df_5m['High'].iloc[-2])
     
     smc_setup = "Bullish FVG" if bull_fvg else ("Liquidity Sweep" if sweep_low else ("Order Block" if bull_ob else "None"))
     
-    # 3. Standard Chart Formations (Flag, Triangle, Cup & Handle)
+    # 3. Chart Patterns
     vol_spike = df_5m['Volume'].iloc[-1] > (df_5m['Volume'].iloc[-20:].mean() * 1.8)
     range_narrow = (df_5m['High'].iloc[-5:].max() - df_5m['Low'].iloc[-5:].min()) < (last_price * 0.005)
-    
     chart_pattern = "Flag Breakout" if (vol_spike and day_trend == "Uptrend") else ("Triangle Squeeze" if range_narrow else "Standard Trend")
     
     # 4. Sector Relative Strength Multiplier
     sec_info = SECTOR_MAP.get(ticker_symbol, {"symbol": "^NSEI", "name": "NIFTY 50"})
     sec_return = sector_data.get(sec_info["name"], {}).get("return", 0.0)
     
-    # Sector Boost: If trend aligns with sector performance, boost score
     sector_boost = 1.0
     if day_trend == "Uptrend" and sec_return > 0:
-        sector_boost = 1.25  # +25% rank boost for sector alignment
+        sector_boost = 1.25
     elif day_trend == "Downtrend" and sec_return < 0:
         sector_boost = 1.25
     elif (day_trend == "Uptrend" and sec_return < -0.5) or (day_trend == "Downtrend" and sec_return > 0.5):
-        sector_boost = 0.75  # Demotion for working against strong sector momentum
+        sector_boost = 0.75
         
     # 5. AI Probability Prediction
     ai_prob = np.random.uniform(0.68, 0.93) if smc_setup != "None" else np.random.uniform(0.40, 0.65)
     
-    # 6. Dynamic Target & Stoploss Calculation
+    # 6. Dynamic Target & Stoploss
     atr = (df_5m['High'] - df_5m['Low']).iloc[-14:].mean()
     if day_trend == "Uptrend":
         stop_loss = round(last_price - (atr * 1.5), 2)
@@ -213,7 +218,6 @@ def scan_stock_metrics(ticker_symbol, sector_data):
         target = round(last_price - (atr * 3.0), 2)
         
     reward_risk = round(abs(target - last_price) / max(abs(last_price - stop_loss), 0.05), 2)
-    
     composite_score = round(ai_prob * sector_boost * (1 + (reward_risk / 10)), 3)
     
     return {
@@ -237,14 +241,38 @@ def scan_stock_metrics(ticker_symbol, sector_data):
 # 5. STREAMLIT INTERFACE & CONTROLS
 # ==========================================
 st.sidebar.header("Scanner Controls")
-selected_watchlist = st.sidebar.multiselect("Active Watchlist", DEFAULT_WATCHLIST, default=DEFAULT_WATCHLIST)
+
+selected_options = st.sidebar.multiselect(
+    "Active Watchlist / Sectors",
+    options=ALL_WATCHLIST_OPTIONS,
+    default=[COMBINED_OPTION],
+    help="Select 'Combined Watchlist' to scan all stocks, or choose specific sectors / stock tickers."
+)
+
+# Resolve target stocks from selection
+active_watchlist = []
+if COMBINED_OPTION in selected_options:
+    active_watchlist = list(SECTOR_MAP.keys())
+else:
+    for opt in selected_options:
+        if opt.startswith("📁 Sector: "):
+            sec_name = opt.replace("📁 Sector: ", "")
+            for stock_sym, info in SECTOR_MAP.items():
+                if info["name"] == sec_name and stock_sym not in active_watchlist:
+                    active_watchlist.append(stock_sym)
+        elif opt in SECTOR_MAP and opt not in active_watchlist:
+            active_watchlist.append(opt)
+
+if not active_watchlist:
+    active_watchlist = list(SECTOR_MAP.keys())
+
 lock_screen = st.sidebar.checkbox("🔒 Lock Screen (Freeze Updates)")
 
 if st.sidebar.button("🚀 Run AI Scan & Rank", type="primary") or lock_screen:
     if "cached_scan_results" not in st.session_state or not lock_screen:
         scanned_data = []
         with st.spinner("Analyzing historical market structure & sector relative strength..."):
-            for sym in selected_watchlist:
+            for sym in active_watchlist:
                 res = scan_stock_metrics(sym, macro_sectors)
                 if res:
                     scanned_data.append(res)
@@ -257,7 +285,6 @@ if st.sidebar.button("🚀 Run AI Scan & Rank", type="primary") or lock_screen:
     st.subheader("🎯 High-Conviction AI & Sector Aligned Signals")
     st.markdown("*Rankings dynamically incorporate AI probability, SMC signals, and real-time Sector Relative Strength.*")
     
-    # Display Top 3 Cards
     if not df_results.empty:
         top_3 = df_results.head(3)
         cols = st.columns(3)
