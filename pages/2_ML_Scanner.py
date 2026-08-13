@@ -44,56 +44,76 @@ else:
 st.sidebar.success(f"✅ AI Engine Active: {len(expected_features)} Features")
 st.sidebar.info("🎯 Dynamic ATR & Structural Swings applied for Targets/Stoploss.")
 
-# --- 2. INDEX & MARKET SENTIMENT FETCHING ---
+# --- 2. INDEX & SECTOR SENTIMENT FETCHING ---
+SECTOR_MAP = {
+    "Banking": "^NSEBANK",
+    "IT": "^CNXIT",
+    "Auto": "^CNXAUTO",
+    "Energy": "^CNXENERGY",
+    "FMCG": "^CNXFMCG",
+    "Metal": "^CNXMETAL",
+    "Infra": "^CNXINFRA",
+    "Financials": "NIFTY_FIN_SERVICE.NS",
+    "Telecom": "^NSEI",
+    "Capital Goods": "^NSEI",
+    "Healthcare": "^CNXPHARMA"
+}
+
 @st.cache_data(ttl=300)
-def fetch_index_trends():
-    tickers = ["^NSEI", "^NSEMDCP50", "NIFTYSMALL100.NS", "^CNXSMLCAP"]
+def fetch_market_sentiments():
+    index_tickers = ["^NSEI", "^NSEMDCP50", "NIFTYSMALL100.NS", "^CNXSC", "^CNXSMLCAP"]
+    sector_tickers = list(set(SECTOR_MAP.values()))
+    all_tickers = list(set(index_tickers + sector_tickers))
+
     trends = {}
-    returns = {"Nifty_1D_Return": 0.0, "Midcap_1D_Return": 0.0, "Smallcap_1D_Return": 0.0}
+    returns = {}
     try:
-        data = yf.download(tickers, period="5d", interval="1d", progress=False)
+        data = yf.download(all_tickers, period="5d", interval="1d", progress=False)
         close_df = data["Close"] if "Close" in data else data
+
+        def get_1d_return(ticker_symbol):
+            if ticker_symbol in close_df:
+                s = close_df[ticker_symbol].dropna()
+                if len(s) >= 2:
+                    return float((s.iloc[-1] - s.iloc[-2]) / s.iloc[-2])
+            return 0.0
+
+        returns["Nifty_1D_Return"] = get_1d_return("^NSEI")
+        returns["Midcap_1D_Return"] = get_1d_return("^NSEMDCP50")
         
-        # Nifty 50
-        if "^NSEI" in close_df:
-            s = close_df["^NSEI"].dropna()
-            if len(s) >= 2:
-                r = float((s.iloc[-1] - s.iloc[-2]) / s.iloc[-2])
-                returns["Nifty_1D_Return"] = r
-                trends["^NSEI"] = f"{'+' if r >= 0 else ''}{r*100:.2f}%"
+        # Smallcap multi-fallback check
+        sml_ret = 0.0
+        for sml_t in ["NIFTYSMALL100.NS", "^CNXSC", "^CNXSMLCAP"]:
+            r = get_1d_return(sml_t)
+            if abs(r) > 1e-5:
+                sml_ret = r
+                break
+        returns["Smallcap_1D_Return"] = sml_ret
 
-        # Nifty Midcap
-        if "^NSEMDCP50" in close_df:
-            s = close_df["^NSEMDCP50"].dropna()
-            if len(s) >= 2:
-                r = float((s.iloc[-1] - s.iloc[-2]) / s.iloc[-2])
-                returns["Midcap_1D_Return"] = r
-                trends["^NSEMDCP50"] = f"{'+' if r >= 0 else ''}{r*100:.2f}%"
+        trends["^NSEI"] = f"{'+' if returns['Nifty_1D_Return'] >= 0 else ''}{returns['Nifty_1D_Return']*100:.2f}%"
+        trends["^NSEMDCP50"] = f"{'+' if returns['Midcap_1D_Return'] >= 0 else ''}{returns['Midcap_1D_Return']*100:.2f}%"
+        trends["Smallcap"] = f"{'+' if sml_ret >= 0 else ''}{sml_ret*100:.2f}%"
 
-        # Nifty Smallcap (multi-fallback)
-        sml_s = None
-        for t in ["NIFTYSMALL100.NS", "^CNXSMLCAP"]:
-            if t in close_df:
-                s_cand = close_df[t].dropna()
-                if len(s_cand) >= 2 and abs(float((s_cand.iloc[-1] - s_cand.iloc[-2]) / s_cand.iloc[-2])) > 1e-5:
-                    sml_s = s_cand
-                    break
-        if sml_s is not None:
-            r = float((sml_s.iloc[-1] - sml_s.iloc[-2]) / sml_s.iloc[-2])
-            returns["Smallcap_1D_Return"] = r
-            trends["Smallcap"] = f"{'+' if r >= 0 else ''}{r*100:.2f}%"
-        else:
-            trends["Smallcap"] = "0.00%"
+        for sector_name, sec_ticker in SECTOR_MAP.items():
+            returns[f"Sector_{sector_name}"] = get_1d_return(sec_ticker)
+
     except Exception:
         pass
     return trends, returns
 
-idx_trends, idx_returns = fetch_index_trends()
+idx_trends, market_returns = fetch_market_sentiments()
 
 col1, col2, col3 = st.columns(3)
 col1.metric("Nifty 50 (Sentiment)", idx_trends.get("^NSEI", "Active"))
 col2.metric("Nifty Midcap", idx_trends.get("^NSEMDCP50", "Active"))
 col3.metric("Nifty Smallcap", idx_trends.get("Smallcap", "Active"))
+
+st.markdown("**🌐 Sectoral Performance (Live Impact)**")
+sec_cols = st.columns(6)
+key_sectors = ["Banking", "IT", "Auto", "Energy", "FMCG", "Metal"]
+for idx, sec in enumerate(key_sectors):
+    sec_ret = market_returns.get(f"Sector_{sec}", 0.0) * 100
+    sec_cols[idx % 6].metric(sec, f"{'+' if sec_ret >= 0 else ''}{sec_ret:.2f}%")
 
 st.markdown("---")
 
@@ -178,17 +198,17 @@ def compute_rsi(series, period=14):
     rs = gain / (loss + 1e-9)
     return 100 - (100 / (1 + rs))
 
-# --- 4. COMPOSITE RANKING ENGINE (PDF + INDEX RELATIVE STRENGTH ALIGNED) ---
+# --- 4. COMPOSITE RANKING ENGINE ---
 def calculate_composite_score(row):
     ai_prob = float(row.get("Raw_AI_Prob", 50.0))
     
     smc_str = str(row.get("SMC Structure", "")).upper()
     if "+" in smc_str:
-        smc_mult = 1.25  # Multiple confluences
+        smc_mult = 1.25
     elif smc_str in ["STRUCTURE CLEAN", "", "NONE"]:
         smc_mult = 0.80
     else:
-        smc_mult = 1.10  # Single confluence
+        smc_mult = 1.10
 
     try:
         tgt_val = float(row.get("Tgt_Pct_Num", 1.0))
@@ -199,7 +219,6 @@ def calculate_composite_score(row):
 
     day_trend = str(row.get("Day Trend", "")).strip()
     
-    # Structural alignment with day trend
     is_bullish_smc = any(x in smc_str for x in ["BULLISH", "SWEEP LOW", "FLAG BREAKOUT"])
     is_bearish_smc = any(x in smc_str for x in ["BEARISH", "SWEEP HIGH", "FLAG BREAKOUT"])
     
@@ -209,9 +228,9 @@ def calculate_composite_score(row):
     elif day_trend == "Downtrend" and is_bearish_smc:
         trend_align = 1.20
     elif (day_trend == "Uptrend" and is_bearish_smc) or (day_trend == "Downtrend" and is_bullish_smc):
-        trend_align = 0.60  # Discount when fighting intraday day trend
+        trend_align = 0.60
 
-    # Parent Index Alignment Multiplier
+    # Index Alignment Multiplier
     idx_ret = float(row.get("Index_Return_Val", 0.0))
     idx_align = 1.0
     if day_trend == "Uptrend" and idx_ret > 0:
@@ -221,7 +240,17 @@ def calculate_composite_score(row):
     elif (day_trend == "Uptrend" and idx_ret < -0.003) or (day_trend == "Downtrend" and idx_ret > 0.003):
         idx_align = 0.85
 
-    score = ai_prob * smc_mult * rr_ratio * trend_align * idx_align
+    # Sector Sentiment Alignment Multiplier
+    sec_ret = float(row.get("Sector_Return_Val", 0.0))
+    sec_align = 1.0
+    if day_trend == "Uptrend" and sec_ret > 0:
+        sec_align = 1.20
+    elif day_trend == "Downtrend" and sec_ret < 0:
+        sec_align = 1.20
+    elif (day_trend == "Uptrend" and sec_ret < -0.003) or (day_trend == "Downtrend" and sec_ret > 0.003):
+        sec_align = 0.80
+
+    score = ai_prob * smc_mult * rr_ratio * trend_align * idx_align * sec_align
     return round(score, 2)
 
 # --- 5. CONTROLS & SESSION LOCK ---
@@ -240,7 +269,7 @@ if lock_signals and st.session_state.locked_results is not None:
 elif run_scan:
     with st.spinner("Evaluating 32 stocks across Nifty 50, Midcap & Smallcap..."):
         results = []
-        market_sentiment = float(idx_returns.get("Nifty_1D_Return", 0.0)) * 100
+        market_sentiment = float(market_returns.get("Nifty_1D_Return", 0.0)) * 100
 
         for ticker in selected_tickers:
             try:
@@ -270,7 +299,6 @@ elif run_scan:
                 last_price = float(close_5m.iloc[-1])
                 day_open = float(open_1d.iloc[-1])
                 
-                # Day Trend (Price vs Day Open)
                 day_trend = "Uptrend" if last_price >= day_open else "Downtrend"
 
                 rvol = float(vol_5m.iloc[-1] / (vol_5m.tail(20).mean() + 1e-5))
@@ -338,7 +366,6 @@ elif run_scan:
                 if flag_breakout: smc_signals.append("Flag Breakout")
                 smc_str = " + ".join(smc_signals) if smc_signals else "Structure Clean"
 
-                # Dynamic Target & SL (Daily ATR & Dynamic Swings)
                 recent_swing_high = float(high_5m.tail(15).max())
                 recent_swing_low = float(low_5m.tail(15).min())
                 
@@ -366,11 +393,13 @@ elif run_scan:
                 sector_group = meta["sector"]
 
                 if idx_group == "Nifty 50":
-                    idx_ret_val = idx_returns.get("Nifty_1D_Return", 0.0)
+                    idx_ret_val = market_returns.get("Nifty_1D_Return", 0.0)
                 elif idx_group == "Nifty Midcap":
-                    idx_ret_val = idx_returns.get("Midcap_1D_Return", 0.0)
+                    idx_ret_val = market_returns.get("Midcap_1D_Return", 0.0)
                 else:
-                    idx_ret_val = idx_returns.get("Smallcap_1D_Return", 0.0)
+                    idx_ret_val = market_returns.get("Smallcap_1D_Return", 0.0)
+
+                sec_ret_val = market_returns.get(f"Sector_{sector_group}", 0.0)
 
                 item = {
                     "Stock": ticker,
@@ -387,7 +416,8 @@ elif run_scan:
                     "Raw_AI_Prob": score_pct,
                     "Tgt_Pct_Num": dyn_tgt_pct,
                     "SL_Pct_Num": dyn_sl_pct,
-                    "Index_Return_Val": idx_ret_val
+                    "Index_Return_Val": idx_ret_val,
+                    "Sector_Return_Val": sec_ret_val
                 }
                 item["Rank Score"] = calculate_composite_score(item)
                 results.append(item)
@@ -403,7 +433,7 @@ elif run_scan:
 # --- 6. DISPLAY SECTION ---
 if "results_df" in locals() and results_df is not None:
     st.subheader("🎯 TOP 3 HIGH-CONVICTION TRADES")
-    st.caption("Highest probability setups ranked by PDF Composite Score (AI Prob × SMC Confluence × Dynamic RR × Day Trend & Index Alignment).")
+    st.caption("Highest probability setups ranked by PDF Composite Score (AI Prob × SMC Confluence × Dynamic RR × Trend, Index & Sector Alignment).")
     
     top_3 = results_df.head(3)
     card_cols = st.columns(3)
