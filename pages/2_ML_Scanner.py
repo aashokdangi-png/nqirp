@@ -59,7 +59,6 @@ SECTOR_MAP = {
     "Healthcare": "^CNXPHARMA"
 }
 
-# Constituent stock tickers for live intraday fallback when YF index feeds freeze
 SECTOR_CONSTITUENTS = {
     "Auto": ["MARUTI.NS", "M&M.NS", "ASHOKLEY.NS"],
     "Energy": ["RELIANCE.NS", "NTPC.NS", "TATAPOWER.NS"],
@@ -93,17 +92,12 @@ def fetch_market_sentiments():
             return 0.0
 
         def get_group_avg_return(ticker_list):
-            rets = []
-            for t in ticker_list:
-                r = get_1d_return(t)
-                if abs(r) > 1e-6:
-                    rets.append(r)
+            rets = [get_1d_return(t) for t in ticker_list if abs(get_1d_return(t)) > 1e-6]
             return float(np.mean(rets)) if rets else 0.0
 
         returns["Nifty_1D_Return"] = get_1d_return("^NSEI")
         returns["Midcap_1D_Return"] = get_1d_return("^NSEMDCP50")
         
-        # Smallcap multi-fallback check (Index Tickers -> Constituent Stocks Average)
         sml_ret = 0.0
         for sml_t in ["NIFTYSMALL100.NS", "^CNXSC", "^CNXSMLCAP"]:
             r = get_1d_return(sml_t)
@@ -119,7 +113,6 @@ def fetch_market_sentiments():
         trends["^NSEMDCP50"] = f"{'+' if returns['Midcap_1D_Return'] >= 0 else ''}{returns['Midcap_1D_Return']*100:.2f}%"
         trends["Smallcap"] = f"{'+' if sml_ret >= 0 else ''}{sml_ret*100:.2f}%"
 
-        # Sectoral Returns (Index Ticker -> Constituent Stocks Fallback)
         for sector_name, sec_ticker in SECTOR_MAP.items():
             r = get_1d_return(sec_ticker)
             if abs(r) < 1e-5 and sector_name in SECTOR_CONSTITUENTS:
@@ -227,7 +220,7 @@ def compute_rsi(series, period=14):
     rs = gain / (loss + 1e-9)
     return 100 - (100 / (1 + rs))
 
-# --- 4. COMPOSITE RANKING ENGINE ---
+# --- 4. COMPOSITE RANKING ENGINE WITH EXHAUSTION PENALTY ---
 def calculate_composite_score(row):
     ai_prob = float(row.get("Raw_AI_Prob", 50.0))
     
@@ -279,7 +272,15 @@ def calculate_composite_score(row):
     elif (day_trend == "Uptrend" and sec_ret < -0.003) or (day_trend == "Downtrend" and sec_ret > 0.003):
         sec_align = 0.80
 
-    score = ai_prob * smc_mult * rr_ratio * trend_align * idx_align * sec_align
+    # Intraday Exhaustion Multiplier (Prevents late FOMO entries on 3-4% moves)
+    day_move_pct = float(row.get("Day_Move_Pct", 0.0))
+    atr_pct_val = float(row.get("ATR_Pct_Val", 1.0))
+    
+    exhaustion_mult = 1.0
+    if day_move_pct >= 3.0 or (atr_pct_val > 0 and (day_move_pct / atr_pct_val) >= 1.5):
+        exhaustion_mult = 0.50  # 50% penalty for exhausted / overextended moves
+
+    score = ai_prob * smc_mult * rr_ratio * trend_align * idx_align * sec_align * exhaustion_mult
     return round(score, 2)
 
 # --- 5. CONTROLS & SESSION LOCK ---
@@ -328,6 +329,7 @@ elif run_scan:
                 last_price = float(close_5m.iloc[-1])
                 day_open = float(open_1d.iloc[-1])
                 
+                day_move_pct = abs((last_price - day_open) / day_open) * 100
                 day_trend = "Uptrend" if last_price >= day_open else "Downtrend"
 
                 rvol = float(vol_5m.iloc[-1] / (vol_5m.tail(20).mean() + 1e-5))
@@ -395,6 +397,9 @@ elif run_scan:
                 if flag_breakout: smc_signals.append("Flag Breakout")
                 smc_str = " + ".join(smc_signals) if smc_signals else "Structure Clean"
 
+                if day_move_pct >= 3.0 or (atr_pct > 0 and (day_move_pct / atr_pct) >= 1.5):
+                    smc_str += " | ⚡ EXTENDED"
+
                 recent_swing_high = float(high_5m.tail(15).max())
                 recent_swing_low = float(low_5m.tail(15).min())
                 
@@ -446,7 +451,9 @@ elif run_scan:
                     "Tgt_Pct_Num": dyn_tgt_pct,
                     "SL_Pct_Num": dyn_sl_pct,
                     "Index_Return_Val": idx_ret_val,
-                    "Sector_Return_Val": sec_ret_val
+                    "Sector_Return_Val": sec_ret_val,
+                    "Day_Move_Pct": day_move_pct,
+                    "ATR_Pct_Val": atr_pct
                 }
                 item["Rank Score"] = calculate_composite_score(item)
                 results.append(item)
@@ -462,7 +469,7 @@ elif run_scan:
 # --- 6. DISPLAY SECTION ---
 if "results_df" in locals() and results_df is not None:
     st.subheader("🎯 TOP 3 HIGH-CONVICTION TRADES")
-    st.caption("Highest probability setups ranked by PDF Composite Score (AI Prob × SMC Confluence × Dynamic RR × Trend, Index & Sector Alignment).")
+    st.caption("Highest probability setups ranked by PDF Composite Score (AI Prob × SMC Confluence × Dynamic RR × Trend, Index & Sector Alignment × Exhaustion Penalty).")
     
     top_3 = results_df.head(3)
     card_cols = st.columns(3)
