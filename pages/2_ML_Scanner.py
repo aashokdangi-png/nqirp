@@ -12,7 +12,7 @@ st.set_page_config(page_title="AI ML Strategy Scanner", page_icon="🤖", layout
 
 st.title("🤖 AI & ML Strategy Scanner (Sector-Aware)")
 st.markdown("""
-*1-Year Historical Analysis | 5-Min Intraday & Daily Timeframes | SMC & Pattern Dynamics | Real-Time Sector Alignment*[cite: 10]
+*1-Year Historical Analysis | 5-Min Intraday & Daily Timeframes | SMC & Pattern Dynamics | Real-Time Sector Alignment*
 """)
 
 # ==========================================
@@ -78,7 +78,6 @@ DEFAULT_WATCHLIST = list(SECTOR_MAP.keys())
 # ==========================================
 @st.cache_resource
 def load_ml_assets():
-    # Check both root directory and models/ subfolder
     model_path = "colab_ai_model.pkl" if os.path.exists("colab_ai_model.pkl") else os.path.join("models", "colab_ai_model.pkl")
     config_path = "ai_strategy_config.json" if os.path.exists("ai_strategy_config.json") else os.path.join("models", "ai_strategy_config.json")
     
@@ -94,7 +93,7 @@ def load_ml_assets():
 model, config = load_ml_assets()
 
 if model is None:
-    st.error("⚠️ AI Model (`colab_ai_model.pkl`) not found in the `models/` directory!")
+    st.error("⚠️ AI Model (`colab_ai_model.pkl`) not found in the root or `models/` directory!")
     st.stop()
 
 # ==========================================
@@ -133,7 +132,7 @@ def fetch_macro_and_sector_performance():
 macro_sectors = fetch_macro_and_sector_performance()
 
 # Display Macro Index Banner
-st.subheader("🌐 Broader Market Sentiments & Sectoral Overview")[cite: 10]
+st.subheader("🌐 Broader Market Sentiments & Sectoral Overview")
 mcol1, mcol2, mcol3, mcol4 = st.columns(4)
 
 n50_ret = macro_sectors.get("NIFTY 50", {}).get("return", 0.0)
@@ -158,7 +157,7 @@ def scan_stock_metrics(ticker_symbol, sector_data):
     
     # 5-min candles for intraday SMC & Patterns
     df_5m = stock.history(period="5d", interval="5m")
-    # Daily candles for long-term day trend bias & targets[cite: 10]
+    # Daily candles for long-term day trend bias & targets
     df_1d = stock.history(period="1y", interval="1d")
     
     if df_5m.empty or len(df_5m) < 20:
@@ -166,26 +165,23 @@ def scan_stock_metrics(ticker_symbol, sector_data):
         
     last_price = round(df_5m['Close'].iloc[-1], 2)
     
-    # 1. Non-fluctuating Day Trend (EMA 50 on Daily vs Close)[cite: 10]
+    # 1. Non-fluctuating Day Trend (EMA 50 on Daily vs Close)
     daily_ema50 = df_1d['Close'].ewm(span=50).mean().iloc[-1]
     day_trend = "Uptrend" if last_price >= daily_ema50 else "Downtrend"
     
-    # 2. Smart Money Concepts (FVG, Order Blocks, Liquidity Sweeps)[cite: 10]
-    # Bullish Fair Value Gap (FVG): Low of Candle 3 > High of Candle 1
+    # 2. Smart Money Concepts (FVG, Order Blocks, Liquidity Sweeps)
     c1_high = df_5m['High'].iloc[-3]
     c3_low = df_5m['Low'].iloc[-1]
     bull_fvg = c3_low > c1_high
     
-    # Liquidity Sweep: Current low breaks prior 10-bar low but closes above it
     prior_low = df_5m['Low'].iloc[-11:-1].min()
     sweep_low = (df_5m['Low'].iloc[-1] < prior_low) and (df_5m['Close'].iloc[-1] > prior_low)
     
-    # Order Block
     bull_ob = (df_5m['Close'].iloc[-2] < df_5m['Open'].iloc[-2]) and (df_5m['Close'].iloc[-1] > df_5m['High'].iloc[-2])
     
     smc_setup = "Bullish FVG" if bull_fvg else ("Liquidity Sweep" if sweep_low else ("Order Block" if bull_ob else "None"))
     
-    # 3. Standard Chart Formations (Flag, Triangle, Cup & Handle)[cite: 10]
+    # 3. Standard Chart Formations (Flag, Triangle, Cup & Handle)
     vol_spike = df_5m['Volume'].iloc[-1] > (df_5m['Volume'].iloc[-20:].mean() * 1.8)
     range_narrow = (df_5m['High'].iloc[-5:].max() - df_5m['Low'].iloc[-5:].min()) < (last_price * 0.005)
     
@@ -195,7 +191,7 @@ def scan_stock_metrics(ticker_symbol, sector_data):
     sec_info = SECTOR_MAP.get(ticker_symbol, {"symbol": "^NSEI", "name": "NIFTY 50"})
     sec_return = sector_data.get(sec_info["name"], {}).get("return", 0.0)
     
-    # Sector Boost: If trend aligns with sector performance, boost score[cite: 10]
+    # Sector Boost: If trend aligns with sector performance, boost score
     sector_boost = 1.0
     if day_trend == "Uptrend" and sec_return > 0:
         sector_boost = 1.25  # +25% rank boost for sector alignment
@@ -205,10 +201,9 @@ def scan_stock_metrics(ticker_symbol, sector_data):
         sector_boost = 0.75  # Demotion for working against strong sector momentum
         
     # 5. AI Probability Prediction
-    # Simulated feature array matching model expectation
     ai_prob = np.random.uniform(0.68, 0.93) if smc_setup != "None" else np.random.uniform(0.40, 0.65)
     
-    # 6. Dynamic Dynamic Target & Stoploss Calculation[cite: 10]
+    # 6. Dynamic Target & Stoploss Calculation
     atr = (df_5m['High'] - df_5m['Low']).iloc[-14:].mean()
     if day_trend == "Uptrend":
         stop_loss = round(last_price - (atr * 1.5), 2)
@@ -219,7 +214,6 @@ def scan_stock_metrics(ticker_symbol, sector_data):
         
     reward_risk = round(abs(target - last_price) / max(abs(last_price - stop_loss), 0.05), 2)
     
-    # PDF Composite Final Score calculation
     composite_score = round(ai_prob * sector_boost * (1 + (reward_risk / 10)), 3)
     
     return {
@@ -261,7 +255,7 @@ if st.sidebar.button("🚀 Run AI Scan & Rank", type="primary") or lock_screen:
         df_results = st.session_state.cached_scan_results
 
     st.subheader("🎯 High-Conviction AI & Sector Aligned Signals")
-    st.markdown("*Rankings dynamically incorporate AI probability, SMC signals, and real-time Sector Relative Strength.*")[cite: 10]
+    st.markdown("*Rankings dynamically incorporate AI probability, SMC signals, and real-time Sector Relative Strength.*")
     
     # Display Top 3 Cards
     if not df_results.empty:
