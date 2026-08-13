@@ -78,8 +78,9 @@ DEFAULT_WATCHLIST = list(SECTOR_MAP.keys())
 # ==========================================
 @st.cache_resource
 def load_ml_assets():
-    model_path = os.path.join("models", "colab_ai_model.pkl")
-    config_path = os.path.join("models", "ai_strategy_config.json")
+    # Check both root directory and models/ subfolder
+    model_path = "colab_ai_model.pkl" if os.path.exists("colab_ai_model.pkl") else os.path.join("models", "colab_ai_model.pkl")
+    config_path = "ai_strategy_config.json" if os.path.exists("ai_strategy_config.json") else os.path.join("models", "ai_strategy_config.json")
     
     model, config = None, {}
     if os.path.exists(model_path):
