@@ -6,10 +6,10 @@ import pandas as pd
 import numpy as np
 import yfinance as yf
 
-st.set_page_config(page_title="NQIRP ML Scanner", page_icon="🤖", layout="wide")
+st.set_page_config(page_title="NQIRP ML Scanner v2.0", page_icon="🤖", layout="wide")
 
-st.title("🤖 AI & ML Strategy Scanner")
-st.markdown("*PDF-Aligned Execution: Backtested Model + Dynamic SMC & ATR Targets*")
+st.title("🤖 AI & ML Strategy Scanner v2.0")
+st.markdown("*Institutional-Grade: Additive Weighted Scoring, True SMC Rejections & VWAP Integration*")
 
 # --- 1. ASSET LOADING ---
 @st.cache_resource
@@ -36,13 +36,10 @@ EXACT_FEATURES = [
     'Market_Sentiment'
 ]
 
-if hasattr(model, "feature_names_in_"):
-    expected_features = list(model.feature_names_in_)
-else:
-    expected_features = EXACT_FEATURES
+expected_features = list(model.feature_names_in_) if hasattr(model, "feature_names_in_") else EXACT_FEATURES
 
 st.sidebar.success(f"✅ AI Engine Active: {len(expected_features)} Features")
-st.sidebar.info("🎯 Dynamic ATR & Structural Swings applied for Targets/Stoploss.")
+st.sidebar.info("🎯 Additive Scoring & VWAP Discipline Active.")
 
 # --- 2. INDEX & SECTOR SENTIMENT FETCHING ---
 SECTOR_MAP = {
@@ -78,8 +75,7 @@ def fetch_market_sentiments():
     
     all_tickers = list(set(index_tickers + sector_tickers + fallback_tickers))
 
-    trends = {}
-    returns = {}
+    trends, returns = {}, {}
     try:
         data = yf.download(all_tickers, period="5d", interval="1d", progress=False)
         close_df = data["Close"] if "Close" in data else data
@@ -141,7 +137,6 @@ st.markdown("---")
 
 # --- 3. UNIVERSE SETUP & METADATA REGISTRY ---
 STOCK_METADATA = {
-    # NIFTY 50
     "RELIANCE": {"index": "Nifty 50", "sector": "Energy"},
     "TCS": {"index": "Nifty 50", "sector": "IT"},
     "HDFCBANK": {"index": "Nifty 50", "sector": "Banking"},
@@ -161,7 +156,6 @@ STOCK_METADATA = {
     "NTPC": {"index": "Nifty 50", "sector": "Energy"},
     "M&M": {"index": "Nifty 50", "sector": "Auto"},
 
-    # MIDCAP
     "TATAPOWER": {"index": "Nifty Midcap", "sector": "Energy"},
     "FEDERALBNK": {"index": "Nifty Midcap", "sector": "Banking"},
     "POLYCAB": {"index": "Nifty Midcap", "sector": "Capital Goods"},
@@ -171,7 +165,6 @@ STOCK_METADATA = {
     "MAXHEALTH": {"index": "Nifty Midcap", "sector": "Healthcare"},
     "VOLTAS": {"index": "Nifty Midcap", "sector": "Consumer Durables"},
 
-    # SMALLCAP
     "CDSL": {"index": "Nifty Smallcap", "sector": "Financials"},
     "ANGELONE": {"index": "Nifty Smallcap", "sector": "Financials"},
     "KFINTECH": {"index": "Nifty Smallcap", "sector": "Financials"},
@@ -182,18 +175,14 @@ STOCK_METADATA = {
     "KEI": {"index": "Nifty Smallcap", "sector": "Capital Goods"}
 }
 
-NIFTY_50 = [k for k, v in STOCK_METADATA.items() if v["index"] == "Nifty 50"]
-MIDCAP_SAMPLES = [k for k, v in STOCK_METADATA.items() if v["index"] == "Nifty Midcap"]
-SMALLCAP_SAMPLES = [k for k, v in STOCK_METADATA.items() if v["index"] == "Nifty Smallcap"]
-
 scan_category = st.selectbox("Select Universe", ["All Combined (32 Stocks)", "Nifty 50", "Nifty Midcap", "Nifty Smallcap"])
 
 if scan_category == "Nifty 50":
-    selected_tickers = NIFTY_50
+    selected_tickers = [k for k, v in STOCK_METADATA.items() if v["index"] == "Nifty 50"]
 elif scan_category == "Nifty Midcap":
-    selected_tickers = MIDCAP_SAMPLES
+    selected_tickers = [k for k, v in STOCK_METADATA.items() if v["index"] == "Nifty Midcap"]
 elif scan_category == "Nifty Smallcap":
-    selected_tickers = SMALLCAP_SAMPLES
+    selected_tickers = [k for k, v in STOCK_METADATA.items() if v["index"] == "Nifty Smallcap"]
 else:
     selected_tickers = list(STOCK_METADATA.keys())
 
@@ -220,68 +209,71 @@ def compute_rsi(series, period=14):
     rs = gain / (loss + 1e-9)
     return 100 - (100 / (1 + rs))
 
-# --- 4. COMPOSITE RANKING ENGINE WITH EXHAUSTION PENALTY ---
+# --- 4. FIX 3: ADDITIVE WEIGHTED RANKING ENGINE (SCALE 0 - 100) ---
 def calculate_composite_score(row):
-    ai_prob = float(row.get("Raw_AI_Prob", 50.0))
+    ai_prob = float(row.get("Raw_AI_Prob", 50.0))  # Range: 0 to 100
     
-    smc_str = str(row.get("SMC Structure", "")).upper()
-    if "+" in smc_str:
-        smc_mult = 1.25
-    elif smc_str in ["STRUCTURE CLEAN", "", "NONE"]:
-        smc_mult = 0.80
-    else:
-        smc_mult = 1.10
+    # 1. AI Model Weight (40%)
+    score_ai = ai_prob * 0.40
 
+    # 2. SMC Confluence Weight (20%)
+    smc_str = str(row.get("SMC Structure", "")).upper()
+    smc_score = 0.0
+    if "SWEEP" in smc_str:
+        smc_score += 10.0
+    if "FVG" in smc_str:
+        smc_score += 5.0
+    if "FLAG BREAKOUT" in smc_str:
+        smc_score += 5.0
+    score_smc = min(smc_score, 20.0)
+
+    # 3. Risk-Reward Ratio Weight (15%)
     try:
         tgt_val = float(row.get("Tgt_Pct_Num", 1.0))
         sl_val = float(row.get("SL_Pct_Num", 0.5))
         rr_ratio = tgt_val / sl_val if sl_val > 0 else 1.0
     except Exception:
         rr_ratio = 1.0
+    score_rr = min((rr_ratio / 3.0) * 15.0, 15.0)
 
+    # 4. Trend & Sentiment Alignment Weight (15%)
     day_trend = str(row.get("Day Trend", "")).strip()
-    
-    is_bullish_smc = any(x in smc_str for x in ["BULLISH", "SWEEP LOW", "FLAG BREAKOUT"])
-    is_bearish_smc = any(x in smc_str for x in ["BEARISH", "SWEEP HIGH", "FLAG BREAKOUT"])
-    
-    trend_align = 1.0
-    if day_trend == "Uptrend" and is_bullish_smc:
-        trend_align = 1.20
-    elif day_trend == "Downtrend" and is_bearish_smc:
-        trend_align = 1.20
-    elif (day_trend == "Uptrend" and is_bearish_smc) or (day_trend == "Downtrend" and is_bullish_smc):
-        trend_align = 0.60
-
-    # Index Alignment Multiplier
-    idx_ret = float(row.get("Index_Return_Val", 0.0))
-    idx_align = 1.0
-    if day_trend == "Uptrend" and idx_ret > 0:
-        idx_align = 1.15
-    elif day_trend == "Downtrend" and idx_ret < 0:
-        idx_align = 1.15
-    elif (day_trend == "Uptrend" and idx_ret < -0.003) or (day_trend == "Downtrend" and idx_ret > 0.003):
-        idx_align = 0.85
-
-    # Sector Sentiment Alignment Multiplier
     sec_ret = float(row.get("Sector_Return_Val", 0.0))
-    sec_align = 1.0
-    if day_trend == "Uptrend" and sec_ret > 0:
-        sec_align = 1.20
-    elif day_trend == "Downtrend" and sec_ret < 0:
-        sec_align = 1.20
-    elif (day_trend == "Uptrend" and sec_ret < -0.003) or (day_trend == "Downtrend" and sec_ret > 0.003):
-        sec_align = 0.80
+    idx_ret = float(row.get("Index_Return_Val", 0.0))
 
-    # Intraday Exhaustion Multiplier (Prevents late FOMO entries on 3-4% moves)
+    trend_points = 0.0
+    if day_trend == "Uptrend" and sec_ret > 0:
+        trend_points += 7.5
+    elif day_trend == "Downtrend" and sec_ret < 0:
+        trend_points += 7.5
+
+    if day_trend == "Uptrend" and idx_ret > 0:
+        trend_points += 7.5
+    elif day_trend == "Downtrend" and idx_ret < 0:
+        trend_points += 7.5
+    score_align = trend_points
+
+    # 5. Volume Confirmation Weight (10%)
+    rvol_val = float(row.get("RVOL_Val", 1.0))
+    score_vol = min((rvol_val / 2.0) * 10.0, 10.0)
+
+    # Total Raw Additive Score (Max = 100)
+    total_score = score_ai + score_smc + score_rr + score_align + score_vol
+
+    # Deductions / Penalties
+    
+    # Range Exhaustion Penalty (-25 points)
     day_move_pct = float(row.get("Day_Move_Pct", 0.0))
     atr_pct_val = float(row.get("ATR_Pct_Val", 1.0))
-    
-    exhaustion_mult = 1.0
     if day_move_pct >= 3.0 or (atr_pct_val > 0 and (day_move_pct / atr_pct_val) >= 1.5):
-        exhaustion_mult = 0.50  # 50% penalty for exhausted / overextended moves
+        total_score -= 25.0
 
-    score = ai_prob * smc_mult * rr_ratio * trend_align * idx_align * sec_align * exhaustion_mult
-    return round(score, 2)
+    # FIX 5: VWAP Overextension Penalty (-20 points)
+    vwap_dist = float(row.get("VWAP_Dist_Pct", 0.0))
+    if vwap_dist > 1.5:  # Price is >1.5% stretched above VWAP
+        total_score -= 20.0
+
+    return max(0.0, round(total_score, 2))
 
 # --- 5. CONTROLS & SESSION LOCK ---
 if "locked_results" not in st.session_state:
@@ -297,7 +289,7 @@ if lock_signals and st.session_state.locked_results is not None:
     st.info("🔒 Displaying Locked Watchlist. Uncheck to unlock live updates.")
     results_df = st.session_state.locked_results
 elif run_scan:
-    with st.spinner("Evaluating 32 stocks across Nifty 50, Midcap & Smallcap..."):
+    with st.spinner("Evaluating universe with normalized volume, true SMC sweeps & VWAP..."):
         results = []
         market_sentiment = float(market_returns.get("Nifty_1D_Return", 0.0)) * 100
 
@@ -328,12 +320,28 @@ elif run_scan:
 
                 last_price = float(close_5m.iloc[-1])
                 day_open = float(open_1d.iloc[-1])
-                
                 day_move_pct = abs((last_price - day_open) / day_open) * 100
-                day_trend = "Uptrend" if last_price >= day_open else "Downtrend"
 
-                rvol = float(vol_5m.iloc[-1] / (vol_5m.tail(20).mean() + 1e-5))
+                # FIX 1: NORMALIZED TIME-OF-DAY RVOL
+                df_5m_copy = df_5m.copy()
+                df_5m_copy["Time_Str"] = df_5m_copy.index.strftime("%H:%M")
+                current_time_slot = df_5m_copy["Time_Str"].iloc[-1]
+                
+                time_slot_vols = df_5m_copy[df_5m_copy["Time_Str"] == current_time_slot]["Volume"]
+                avg_slot_vol = time_slot_vols.tail(5).mean() if len(time_slot_vols) > 0 else vol_5m.tail(20).mean()
+                rvol = float(vol_5m.iloc[-1] / (avg_slot_vol + 1e-5))
 
+                # FIX 5: INTRADAY VWAP CALCULATION
+                typical_price = (high_5m + low_5m + close_5m) / 3
+                vwap_series = (typical_price * vol_5m).cumsum() / (vol_5m.cumsum() + 1e-5)
+                current_vwap = float(vwap_series.iloc[-1])
+                vwap_dist_pct = float(((last_price - current_vwap) / current_vwap) * 100)
+
+                # DYNAMIC TREND (5M EMA + DAILY DIRECTION)
+                ema_20 = close_5m.ewm(span=20, adjust=False).mean().iloc[-1]
+                day_trend = "Uptrend" if (last_price > ema_20 and last_price >= day_open) else "Downtrend"
+
+                # ATR 14
                 tr_1d = pd.concat([
                     high_1d - low_1d, 
                     (high_1d - close_1d.shift(1)).abs(), 
@@ -343,14 +351,16 @@ elif run_scan:
                 atr_14_val = float(tr_1d.tail(14).mean())
                 atr_pct = float((atr_14_val / last_price) * 100)
 
+                # RSI 14
                 rsi_series = compute_rsi(close_5m, period=14)
                 rsi_val = float(rsi_series.iloc[-1]) if not np.isnan(rsi_series.iloc[-1]) else 50.0
 
+                # FIX 2: TRUE SMC LIQUIDITY SWEEP (REQUIRES WICK REJECTION)
                 recent_15_max = high_5m.iloc[-15:-1].max() if len(high_5m) >= 15 else high_5m.iloc[:-1].max()
-                sweep_high = 1 if high_5m.iloc[-1] > recent_15_max else 0
-
                 recent_15_min = low_5m.iloc[-15:-1].min() if len(low_5m) >= 15 else low_5m.iloc[:-1].min()
-                sweep_low = 1 if low_5m.iloc[-1] < recent_15_min else 0
+                
+                sweep_high = 1 if (high_5m.iloc[-1] > recent_15_max and close_5m.iloc[-1] < recent_15_max) else 0
+                sweep_low = 1 if (low_5m.iloc[-1] < recent_15_min and close_5m.iloc[-1] > recent_15_min) else 0
 
                 bull_fvg = 1 if (len(high_5m) >= 3 and low_5m.iloc[-1] > high_5m.iloc[-3]) else 0
                 bull_ob = 1 if (close_5m.iloc[-2] < open_5m.iloc[-2] and close_5m.iloc[-1] > high_5m.iloc[-2]) else 0
@@ -392,13 +402,15 @@ elif run_scan:
                 smc_signals = []
                 if bull_fvg: smc_signals.append("Bullish FVG")
                 if bull_ob: smc_signals.append("Bullish OB")
-                if sweep_low: smc_signals.append("Sweep Low")
-                if sweep_high: smc_signals.append("Sweep High")
+                if sweep_low: smc_signals.append("Sweep Low Rejection")
+                if sweep_high: smc_signals.append("Sweep High Rejection")
                 if flag_breakout: smc_signals.append("Flag Breakout")
                 smc_str = " + ".join(smc_signals) if smc_signals else "Structure Clean"
 
                 if day_move_pct >= 3.0 or (atr_pct > 0 and (day_move_pct / atr_pct) >= 1.5):
                     smc_str += " | ⚡ EXTENDED"
+                if vwap_dist_pct > 1.5:
+                    smc_str += " | ⚠️ STRETCHED FROM VWAP"
 
                 recent_swing_high = float(high_5m.tail(15).max())
                 recent_swing_low = float(low_5m.tail(15).min())
@@ -406,19 +418,15 @@ elif run_scan:
                 if day_trend == "Uptrend":
                     sl_price = recent_swing_low if (last_price - recent_swing_low) > (0.1 * atr_14_val) else (last_price - 0.25 * atr_14_val)
                     tgt_price = last_price + (0.5 * atr_14_val)
-                    
                     dyn_tgt_pct = ((tgt_price - last_price) / last_price) * 100
                     dyn_sl_pct = ((last_price - sl_price) / last_price) * 100
-                    
                     tgt_str = f"₹{tgt_price:.2f} (+{dyn_tgt_pct:.1f}%)"
                     sl_str = f"₹{sl_price:.2f} (-{dyn_sl_pct:.1f}%)"
                 else:
                     sl_price = recent_swing_high if (recent_swing_high - last_price) > (0.1 * atr_14_val) else (last_price + 0.25 * atr_14_val)
                     tgt_price = last_price - (0.5 * atr_14_val)
-                    
                     dyn_tgt_pct = ((last_price - tgt_price) / last_price) * 100
                     dyn_sl_pct = ((sl_price - last_price) / last_price) * 100
-                    
                     tgt_str = f"₹{tgt_price:.2f} (-{dyn_tgt_pct:.1f}%)"
                     sl_str = f"₹{sl_price:.2f} (+{dyn_sl_pct:.1f}%)"
 
@@ -440,6 +448,7 @@ elif run_scan:
                     "Index Group": idx_group,
                     "Sector": sector_group,
                     "Last Price": f"₹{last_price:.2f}",
+                    "VWAP": f"₹{current_vwap:.2f}",
                     "Day Trend": day_trend,
                     "Daily ATR %": f"{atr_pct:.2f}%", 
                     "RSI (5m)": f"{rsi_val:.1f}",
@@ -453,7 +462,9 @@ elif run_scan:
                     "Index_Return_Val": idx_ret_val,
                     "Sector_Return_Val": sec_ret_val,
                     "Day_Move_Pct": day_move_pct,
-                    "ATR_Pct_Val": atr_pct
+                    "ATR_Pct_Val": atr_pct,
+                    "RVOL_Val": rvol,
+                    "VWAP_Dist_Pct": vwap_dist_pct
                 }
                 item["Rank Score"] = calculate_composite_score(item)
                 results.append(item)
@@ -469,7 +480,7 @@ elif run_scan:
 # --- 6. DISPLAY SECTION ---
 if "results_df" in locals() and results_df is not None:
     st.subheader("🎯 TOP 3 HIGH-CONVICTION TRADES")
-    st.caption("Highest probability setups ranked by PDF Composite Score (AI Prob × SMC Confluence × Dynamic RR × Trend, Index & Sector Alignment × Exhaustion Penalty).")
+    st.caption("Normalized Additive Scoring (0-100) — Factoring AI, Volume, SMC Rejections, and VWAP Alignment.")
     
     top_3 = results_df.head(3)
     card_cols = st.columns(3)
@@ -480,9 +491,9 @@ if "results_df" in locals() and results_df is not None:
                 st.metric(
                     label=f"Rank #{row['Rank']} — {row['Stock']} ({row['Index Group']})", 
                     value=row["Last Price"], 
-                    delta=f"Rank Score: {row['Rank Score']}"
+                    delta=f"Rank Score: {row['Rank Score']} / 100"
                 )
-                st.write(f"**Sector:** {row['Sector']} | **Trend:** {row['Day Trend']}")
+                st.write(f"**VWAP:** `{row['VWAP']}` | **Trend:** {row['Day Trend']}")
                 st.write(f"**SMC:** {row['SMC Structure']}")
                 st.write(f"**Target:** `{row['Dynamic Target']}`")
                 st.write(f"**Stoploss:** `{row['Dynamic Stoploss']}`")
@@ -493,7 +504,7 @@ if "results_df" in locals() and results_df is not None:
     st.subheader("📊 ALL STOCKS — RANKED WATCHLIST WITH SECTOR MAPPING")
     
     display_cols = [
-        "Rank", "Stock", "Index Group", "Sector", "Rank Score", "Last Price", "Day Trend", 
+        "Rank", "Stock", "Index Group", "Sector", "Rank Score", "Last Price", "VWAP", "Day Trend", 
         "Daily ATR %", "RSI (5m)", "SMC Structure", "AI Probability", 
         "Dynamic Target", "Dynamic Stoploss"
     ]
