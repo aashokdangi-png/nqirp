@@ -59,11 +59,25 @@ SECTOR_MAP = {
     "Healthcare": "^CNXPHARMA"
 }
 
+# Constituent stock tickers for live intraday fallback when YF index feeds freeze
+SECTOR_CONSTITUENTS = {
+    "Auto": ["MARUTI.NS", "M&M.NS", "ASHOKLEY.NS"],
+    "Energy": ["RELIANCE.NS", "NTPC.NS", "TATAPOWER.NS"],
+    "FMCG": ["ITC.NS", "HINDUNILVR.NS"],
+    "Metal": ["TATASTEEL.NS"],
+    "Smallcap": ["CDSL.NS", "ANGELONE.NS", "KFINTECH.NS", "SUZLON.NS", "BSOFT.NS"],
+    "Infra": ["LT.NS", "HFCL.NS"],
+    "Financials": ["BAJFINANCE.NS", "CDSL.NS", "IEX.NS"],
+    "Healthcare": ["MAXHEALTH.NS"]
+}
+
 @st.cache_data(ttl=300)
 def fetch_market_sentiments():
     index_tickers = ["^NSEI", "^NSEMDCP50", "NIFTYSMALL100.NS", "^CNXSC", "^CNXSMLCAP"]
     sector_tickers = list(set(SECTOR_MAP.values()))
-    all_tickers = list(set(index_tickers + sector_tickers))
+    fallback_tickers = [t for lst in SECTOR_CONSTITUENTS.values() for t in lst]
+    
+    all_tickers = list(set(index_tickers + sector_tickers + fallback_tickers))
 
     trends = {}
     returns = {}
@@ -78,24 +92,39 @@ def fetch_market_sentiments():
                     return float((s.iloc[-1] - s.iloc[-2]) / s.iloc[-2])
             return 0.0
 
+        def get_group_avg_return(ticker_list):
+            rets = []
+            for t in ticker_list:
+                r = get_1d_return(t)
+                if abs(r) > 1e-6:
+                    rets.append(r)
+            return float(np.mean(rets)) if rets else 0.0
+
         returns["Nifty_1D_Return"] = get_1d_return("^NSEI")
         returns["Midcap_1D_Return"] = get_1d_return("^NSEMDCP50")
         
-        # Smallcap multi-fallback check
+        # Smallcap multi-fallback check (Index Tickers -> Constituent Stocks Average)
         sml_ret = 0.0
         for sml_t in ["NIFTYSMALL100.NS", "^CNXSC", "^CNXSMLCAP"]:
             r = get_1d_return(sml_t)
             if abs(r) > 1e-5:
                 sml_ret = r
                 break
+        if abs(sml_ret) < 1e-5:
+            sml_ret = get_group_avg_return(SECTOR_CONSTITUENTS["Smallcap"])
+        
         returns["Smallcap_1D_Return"] = sml_ret
 
         trends["^NSEI"] = f"{'+' if returns['Nifty_1D_Return'] >= 0 else ''}{returns['Nifty_1D_Return']*100:.2f}%"
         trends["^NSEMDCP50"] = f"{'+' if returns['Midcap_1D_Return'] >= 0 else ''}{returns['Midcap_1D_Return']*100:.2f}%"
         trends["Smallcap"] = f"{'+' if sml_ret >= 0 else ''}{sml_ret*100:.2f}%"
 
+        # Sectoral Returns (Index Ticker -> Constituent Stocks Fallback)
         for sector_name, sec_ticker in SECTOR_MAP.items():
-            returns[f"Sector_{sector_name}"] = get_1d_return(sec_ticker)
+            r = get_1d_return(sec_ticker)
+            if abs(r) < 1e-5 and sector_name in SECTOR_CONSTITUENTS:
+                r = get_group_avg_return(SECTOR_CONSTITUENTS[sector_name])
+            returns[f"Sector_{sector_name}"] = r
 
     except Exception:
         pass
