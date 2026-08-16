@@ -341,39 +341,43 @@ elif run_scan:
                 
                 prob = float(model.predict_proba(scaler.transform(X_df) if scaler else X_df)[0][1]) if hasattr(model, "predict_proba") else 0.5
                 
-                # FIXED LONG/SHORT TARGET & SL LOGIC
-                recent_swing_high, recent_swing_low = float(high_5m.tail(50).max()), float(low_5m.tail(50).min())
+               # -------------------------------------------------------------
+                # DYNAMIC SMC TARGET & SL LOGIC (Liquidity & Invalidation Based)
+                # -------------------------------------------------------------
+                # Identify major structural liquidity pools (~2 days of data)
+                major_bsl = float(high_5m.tail(150).max()) # Buy-Side Liquidity (Major Swing High)
+                major_ssl = float(low_5m.tail(150).min())  # Sell-Side Liquidity (Major Swing Low)
+                
+                # Identify local liquidity (minor swings causing the pullback)
+                local_bsl = float(high_5m.tail(40).max())
+                local_ssl = float(low_5m.tail(40).min())
+
                 if best_zone and best_zone['state_val'] >= 1:
                     is_long = "Bullish" in best_zone['type'] or "Low" in best_zone['type']
+                    
                     if is_long:
+                        # Invalidation Point: Just beneath the bullish block/sweep
                         sl_price = best_zone['bottom'] - (0.1 * atr_14_val)
-                        tgt_price = recent_swing_high if day_trend == "Uptrend" and recent_swing_high > last_price else last_price + (1.5 * atr_14_val)
-                    else: # Short trade
+                        
+                        # Target: Aim for local liquidity first. If we are already at it, aim for major liquidity.
+                        if local_bsl > last_price + atr_14_val:
+                            tgt_price = local_bsl
+                        else:
+                            tgt_price = major_bsl
+                            
+                    else: # Short trade (e.g., your SBIN setup)
+                        # Invalidation Point: Just above the bearish block/sweep
                         sl_price = best_zone['top'] + (0.1 * atr_14_val)
-                        tgt_price = recent_swing_low if day_trend == "Downtrend" and recent_swing_low < last_price else last_price - (1.5 * atr_14_val)
+                        
+                        # Target: Aim for local sell-side liquidity. If too close, target the major origin of the move.
+                        if local_ssl < last_price - atr_14_val:
+                            tgt_price = local_ssl
+                        else:
+                            tgt_price = major_ssl
                 else:
-                    sl_price = recent_swing_low - (0.25 * atr_14_val) if day_trend == "Uptrend" else recent_swing_high + (0.25 * atr_14_val)
-                    tgt_price = last_price + (1.0 * atr_14_val) if day_trend == "Uptrend" else last_price - (1.0 * atr_14_val)
-
-                dyn_tgt_pct, dyn_sl_pct = abs((tgt_price - last_price) / last_price) * 100, abs((last_price - sl_price) / last_price) * 100
-                meta = STOCK_METADATA.get(ticker, {"index": "Unknown", "sector": "General"})
-                
-                item = {
-                    "Stock": ticker, "Sector": meta["sector"], "Last Price": f"₹{last_price:.2f}",
-                    "Stock Flow": flow_ui, "Stock_Flow_Num": stock_flow_cr,
-                    "Day Trend": day_trend, "Signal State": smc_ui_str, "Context & Triggers": zone_context,
-                    "Target": f"₹{tgt_price:.2f} ({dyn_tgt_pct:.1f}%)", "Stoploss": f"₹{sl_price:.2f} ({dyn_sl_pct:.1f}%)",
-                    "AI Prob": f"{prob*100:.1f}%", "Raw_AI_Prob": prob*100, "SMC Structure": smc_ui_str,
-                    "Tgt_Pct_Num": dyn_tgt_pct, "SL_Pct_Num": dyn_sl_pct
-                }
-                item["Rank Score"] = calculate_composite_score(item)
-                results.append(item)
-            except Exception: continue
-
-        if results:
-            df_temp = pd.DataFrame(results).sort_values(by="Rank Score", ascending=False).reset_index(drop=True)
-            df_temp["Rank"] = df_temp.index + 1
-            st.session_state.locked_results = df_temp
+                    # Fallback if no clean zone is found
+                    sl_price = local_ssl if day_trend == "Uptrend" else local_bsl
+                    tgt_price = major_bsl if day_trend == "Uptrend" else major_ssl
 
 # --- 6. DISPLAY DASHBOARD & VISUAL CHART ---
 if "locked_results" in st.session_state and st.session_state.locked_results is not None:
