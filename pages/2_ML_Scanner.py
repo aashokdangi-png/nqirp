@@ -182,9 +182,26 @@ def fetch_stock_data(ticker):
     df_1d = yf.download(yf_symbol, period="1mo", interval="1d", progress=False, auto_adjust=True)
     return df_5m, df_1d
 
-# --- 4. AUTOMATED LIVE NEWS & PRICED-IN ENGINE (REALISTIC UPGRADE) ---
+# --- 4. AUTOMATED LIVE NEWS & PRICED-IN ENGINE (STRICT FILTERING FIX) ---
+
+# Map tickers to clean search names to prevent market-wide news leakage
+COMPANY_NAMES = {
+    "RELIANCE": ["reliance"], "TCS": ["tcs", "tata consultancy"], "HDFCBANK": ["hdfc bank", "hdfcbank"],
+    "INFY": ["infosys", "infy"], "ICICIBANK": ["icici bank", "icicibank"], "SBIN": ["sbi", "state bank"],
+    "BHARTIARTL": ["bharti airtel", "airtel"], "ITC": ["itc"], "LTIM": ["ltimindtree", "ltim"],
+    "AXISBANK": ["axis bank"], "KOTAKBANK": ["kotak"], "LT": ["larsen", "l&t"],
+    "HINDUNILVR": ["hindustan unilever", "hul"], "BAJFINANCE": ["bajaj finance"],
+    "MARUTI": ["maruti"], "TATASTEEL": ["tata steel"], "NTPC": ["ntpc"], "M&M": ["mahindra", "m&m"],
+    "TATAPOWER": ["tata power"], "FEDERALBNK": ["federal bank"], "POLYCAB": ["polycab"],
+    "PERSISTENT": ["persistent"], "COFORGE": ["coforge"], "ASHOKLEY": ["ashok leyland"],
+    "MAXHEALTH": ["max healthcare", "max health"], "VOLTAS": ["voltas"], "CDSL": ["cdsl"],
+    "ANGELONE": ["angel one", "angelone"], "KFINTECH": ["kfintech", "kfin"], "SUZLON": ["suzlon"],
+    "BSOFT": ["birlasoft", "bsoft"], "HFCL": ["hfcl"], "IEX": ["iex", "indian energy exchange"],
+    "KEI": ["kei industries", "kei"]
+}
+
 def evaluate_live_news(ticker, df_5m):
-    """Fetches news, scales historical impact, persists through weekends, and detects Gap Traps."""
+    """Fetches high-conviction company news, filters out generic noise, and prevents gap-trap buys."""
     try:
         yf_symbol = f"{ticker}.NS" if not ticker.endswith(".NS") else ticker
         stock_info = yf.Ticker(yf_symbol)
@@ -193,96 +210,74 @@ def evaluate_live_news(ticker, df_5m):
         if not news_items:
             return 0.0, "No active news"
 
-        latest_news = news_items[0]
-        headline = latest_news.get("title", "")
-        pub_time = latest_news.get("providerPublishTime", time.time())
+        # Search recent news articles for a headline that specifically mentions this company
+        valid_headline = None
+        pub_time = time.time()
+        company_aliases = COMPANY_NAMES.get(ticker, [ticker.lower()])
+
+        for item in news_items[:5]:  # Inspect top 5 recent articles
+            title = item.get("title", "")
+            title_lower = title.lower()
+            if any(alias in title_lower for alias in company_aliases):
+                valid_headline = title
+                pub_time = item.get("providerPublishTime", time.time())
+                break
         
-        # Convert to hours to safely handle Overnights & Weekends
+        # If no headline directly names this stock, treat as NO SPECIFIC NEWS
+        if not valid_headline:
+            return 0.0, "No stock-specific news"
+
         age_hours = (time.time() - pub_time) / 3600.0
-        
-        # --- 1. HISTORICAL IMPACT TIERS ---
-        # Keywords that historically force massive institutional flows & heavy gaps
-        tier_1_bullish = ["merger", "acquisition", "record", "breakthrough", "bonus", "split", "dividend", "q1", "q2", "q3", "q4", "pact", "soars"]
-        tier_1_bearish = ["fraud", "sebi", "cbi", "resigns", "bankruptcy", "default", "scam", "probe", "downgrade", "plunges", "crash"]
-        
-        # Routine day-to-day news
-        tier_2_bullish = ["surge", "profit", "jump", "buy", "upgrades", "growth", "wins", "order", "approves", "higher"]
-        tier_2_bearish = ["fall", "drop", "loss", "sell", "slump", "misses", "cuts", "lower"]
-        
-        headline_lower = headline.lower()
+        headline_lower = valid_headline.lower()
+
+        # HIGH-CONVICTION CATALYST KEYWORDS (Stripped of generic market noise like "buy", "growth", "up", "fall")
+        tier_1_bullish = ["merger", "acquisition", "q1 result", "q2 result", "q3 result", "q4 result", "net profit up", "secures contract", "fda approval", "bonus issue", "buyback", "order win"]
+        tier_1_bearish = ["sebi", "cbi raid", "fraud", "default", "bankruptcy", "net profit down", "resignation", "penalty", "ban", "investigation"]
+
+        tier_2_bullish = ["upgraded to", "bags order", "approves dividend", "joint venture", "capacity expansion"]
+        tier_2_bearish = ["downgraded to", "margin squeeze", "strike", "factory shutdown", "tax demand"]
+
         sentiment = 0
         multiplier = 1.0
 
-        # Tier 1 events carry a 2x institutional weight multiplier
-        if any(w in headline_lower for w in tier_1_bullish): 
-            sentiment, multiplier = 1, 2.0  
-        elif any(w in headline_lower for w in tier_1_bearish): 
-            sentiment, multiplier = -1, 2.0 
-        elif any(w in headline_lower for w in tier_2_bullish): 
+        if any(w in headline_lower for w in tier_1_bullish):
+            sentiment, multiplier = 1, 2.0
+        elif any(w in headline_lower for w in tier_1_bearish):
+            sentiment, multiplier = -1, 2.0
+        elif any(w in headline_lower for w in tier_2_bullish):
             sentiment, multiplier = 1, 1.0
-        elif any(w in headline_lower for w in tier_2_bearish): 
+        elif any(w in headline_lower for w in tier_2_bearish):
             sentiment, multiplier = -1, 1.0
-        
+
+        # Neutral / Non-catalyst headlines receive 0 score
         if sentiment == 0:
-            return 0.0, f"News: {headline[:30]}..."
-            
-        # --- 2. REALISTIC TIME DECAY (WEEKEND/MONDAY OPEN FIX) ---
-        # Instead of dying after 6 hours, we map to actual market phases
+            return 0.0, f"Routine: {valid_headline[:30]}..."
+
+        # Time Decay Matrix (Sustains Friday night / Weekend news for Monday open)
         if age_hours <= 2:
             base_score = 20.0 * sentiment * multiplier
-            status = "⚡ LIVE BREAKING"
-        elif age_hours <= 18:  # Captured from yesterday's close / overnight
+            status = "⚡ BREAKING"
+        elif age_hours <= 18:
             base_score = 15.0 * sentiment * multiplier
-            status = "🌙 OVERNIGHT CATALYST"
-        elif age_hours <= 72:  # Captures Friday/Weekend news for Monday's open
+            status = "🌙 OVERNIGHT"
+        elif age_hours <= 72:
             base_score = 12.0 * sentiment * multiplier
             status = "📅 WEEKEND CATALYST"
         else:
-            base_score = 0.0
-            status = "🕰️ OLD/DIGESTED"
-            
-        # --- 3. PRICED-IN "GAP TRAP" REALITY CHECK ---
-        # Even if news is massive, if the market ALREADY gapped heavily at the open, we back off.
-        if len(df_5m) > 20 and sentiment != 0 and age_hours > 0.5:
-            # Measure return against recent structural anchor (approx 100 mins ago)
+            return 0.0, f"Outdated: {valid_headline[:30]}..."
+
+        # Gap Trap Protection (Prevents buying the top of a Monday gap-up)
+        if len(df_5m) > 20 and age_hours > 0.5:
             recent_return = ((df_5m['Close'].iloc[-1] - df_5m['Open'].iloc[-20]) / df_5m['Open'].iloc[-20]) * 100
-            
-            # Protect against chasing a massive +3% gap-up on Monday morning
             if sentiment == 1 and recent_return > 3.0:
-                return -15.0, f"🛑 GAP TRAP (+{recent_return:.1f}%): {headline[:25]}..."
-            
-            # Protect against shorting the absolute bottom of a panic dump
+                return -15.0, f"🛑 GAP TRAP (+{recent_return:.1f}%): {valid_headline[:25]}..."
             if sentiment == -1 and recent_return < -3.0:
-                return 15.0, f"🛑 EXHAUSTED SELL ({recent_return:.1f}%): {headline[:25]}..."
-                
-        return base_score, f"{status}: {headline[:35]}..."
-        
+                return 15.0, f"🛑 EXHAUSTED DUMP ({recent_return:.1f}%): {valid_headline[:25]}..."
+
+        return base_score, f"{status}: {valid_headline[:35]}..."
+
     except Exception:
         return 0.0, "News API Offline"
-
-def compute_rsi(series, period=14):
-    delta = series.diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
-    rs = gain / (loss + 1e-9)
-    return 100 - (100 / (1 + rs))
-
-def detect_chart_patterns(df_5m):
-    patterns = []
-    if len(df_5m) < 40: return patterns
-    highs, lows, closes = df_5m['High'].tail(40), df_5m['Low'].tail(40), df_5m['Close'].tail(40)
-    last_price = closes.iloc[-1]
-    
-    if ((closes.iloc[-1] - closes.iloc[-10]) / closes.iloc[-10] > 0.003 and (highs.tail(10).max() - lows.tail(10).min()) / last_price < 0.015):
-        patterns.append("Bull Flag Breakout")
-        
-    r_highs, r_lows = [highs.iloc[i:i+8].max() for i in range(0, 32, 8)], [lows.iloc[i:i+8].min() for i in range(0, 32, 8)]
-    if len(r_highs) >= 4 and r_highs[-1] < r_highs[-2] and r_lows[-1] > r_lows[-2]: patterns.append("Triangle Consolidation")
-
-    l_high, b_low, r_high, h_low = highs.iloc[0:15].max(), lows.iloc[15:25].min(), highs.iloc[25:35].max(), lows.iloc[35:].min()
-    if (l_high - b_low) / b_low > 0.015 and b_low < r_high < l_high * 1.02 and h_low > b_low and last_price >= h_low:
-        patterns.append("Cup & Handle")
-    return patterns
 
 # --- 5. FULL LIFECYCLE ENGINE (BULLISH/BEARISH OBs & SWEEPS) ---
 def track_smc_zones(df_5m, lookback=50):
