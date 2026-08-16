@@ -416,10 +416,15 @@ if "locked_results" in st.session_state and st.session_state.locked_results is n
         if idx < len(results_df.head(3)):
             row = results_df.iloc[idx]
             with col:
-                st.metric(label=f"#{row['Rank']} {row['Stock']} ({row['Index']} | {row['Sector']})", value=row["Last Price"], delta=f"Score: {row['Rank Score']} | {row['Stock Flow']}")
-                st.write(f"**State:** `{row['Signal State']}`")
-                st.write(f"**Context:** {row['Context & Triggers']}")
-                st.write(f"**Target:** {row['Target']} | **SL:** {row['Stoploss']}")
+                # Use .get() to prevent KeyErrors from old cached session state data
+                idx_val = row.get('Index', 'N/A')
+                sec_val = row.get('Sector', 'N/A')
+                
+                st.metric(
+                    label=f"#{row['Rank']} {row['Stock']} ({idx_val} | {sec_val})", 
+                    value=row["Last Price"], 
+                    delta=f"Score: {row['Rank Score']} | {row['Stock Flow']}"
+                )
 
     st.markdown("---")
     st.subheader("📈 LIVE VISUAL CONFIRMATION (Top Ranked Setup)")
