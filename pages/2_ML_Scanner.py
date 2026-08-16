@@ -12,7 +12,7 @@ st.set_page_config(page_title="NQIRP ML Scanner v4.0", page_icon="🤖", layout=
 st.title("🤖 AI & ML Strategy Scanner v4.0")
 st.markdown("*Institutional-Grade: Real-Time Charts, Zone Lifecycles, Candlestick Triggers & FII/DII Flow*")
 
-# --- 1. ASSET LOADING ---
+# --- 1. ASSET LOADING & MACRO BIAS ---
 @st.cache_resource
 def load_ai_assets():
     model = joblib.load("colab_ai_model.pkl") if os.path.exists("colab_ai_model.pkl") else None
@@ -33,6 +33,15 @@ EXACT_FEATURES = [
 expected_features = list(model.feature_names_in_) if hasattr(model, "feature_names_in_") else EXACT_FEATURES
 
 st.sidebar.success(f"✅ AI Engine Configured: {len(expected_features)} Features")
+
+# NEW: Discretionary Quant Macro Bias
+st.sidebar.markdown("---")
+st.sidebar.markdown("### 📰 Macro Catalysts (Overnight/Live News)")
+active_themes = st.sidebar.multiselect(
+    "Select Sectors with Active News/Tailwinds:", 
+    ["Banking", "IT", "Auto", "Energy", "FMCG", "Metal", "Infra", "Financials", "Telecom", "Capital Goods", "Healthcare", "Consumer Durables"],
+    help="Select sectors experiencing major news events (e.g., Govt Speeches, RBI Policy, Global cues). Setups in these sectors receive a massive institutional score boost."
+)
 st.sidebar.info("🎯 Dynamic SMC Tracking, Bearish/Bullish Patterns & Stock-Level Money Flow Active.")
 
 # --- 2. INDEX, SECTOR SENTIMENT & FII/DII ORDER FLOW ---
@@ -258,25 +267,28 @@ def calculate_composite_score(row):
     tgt_pct = float(row.get("Tgt_Pct_Num", 1.0))
     rr = tgt_pct / sl_pct if sl_pct > 0 else 1.0
     
-    # Penalty for bad RR (< 1.5)
     if rr < 1.5:
         score_rr = 0.0
     else:
         score_rr = min((rr / 3.0) * 15.0, 15.0)
 
-    # Discretionary Flow Alignment Rule: Penalize counter-flow setups
     stock_flow = float(row.get("Stock_Flow_Num", 0))
     is_long = "Bullish" in smc_str or "LOW" in smc_str or row.get("Day Trend") == "Uptrend"
     
     score_align = 0.0
     if is_long and stock_flow > 0:
-        score_align += 15.0  # Inflow confirms Long
+        score_align += 15.0  
     elif not is_long and stock_flow < 0:
-        score_align += 15.0  # Outflow confirms Short
+        score_align += 15.0  
     else:
-        score_align -= 10.0  # Heavy penalty for counter-flow trades (e.g. Long with Cash Outflow)
+        score_align -= 10.0  
 
-    return max(0.0, round(score_ai + smc_score + score_rr + score_align, 2))
+    # NEW: Macro / News Catalyst Thematic Boost
+    score_macro = 0.0
+    if row.get("Sector") in active_themes:
+        score_macro = 20.0  # Massive institutional bias modifier
+
+    return max(0.0, round(score_ai + smc_score + score_rr + score_align + score_macro, 2))
 
 # --- 5. CORE SCANNER ENGINE ---
 if "locked_results" not in st.session_state: st.session_state.locked_results = None
@@ -287,7 +299,7 @@ run_scan = st.button("🚀 Run AI Scan & Rank", type="primary")
 if lock_signals and st.session_state.locked_results is not None:
     results_df = st.session_state.locked_results
 elif run_scan:
-    with st.spinner("Evaluating live order flow, zone mitigation & candlestick triggers..."):
+    with st.spinner("Evaluating live order flow, news catalysts, & structural liquidity..."):
         results = []
         market_sentiment = float(market_returns.get("Nifty_1D_Return", 0.0)) * 100
 
@@ -302,7 +314,6 @@ elif run_scan:
                 vol_5m = df_5m["Volume"].dropna() if "Volume" in df_5m else pd.Series(1, index=close_5m.index)
                 last_price, day_open = float(close_5m.iloc[-1]), float(df_1d["Open"].dropna().iloc[-1])
 
-                # STOCK-LEVEL MONEY FLOW (Proxy Cr)
                 stock_flow_cr = ((last_price - day_open) / day_open) * (vol_5m.tail(75).sum() * last_price) / 10000000
                 flow_ui = f"🟩 ₹{abs(stock_flow_cr):.1f}Cr In" if stock_flow_cr > 0 else f"🟥 ₹{abs(stock_flow_cr):.1f}Cr Out"
 
@@ -315,7 +326,6 @@ elif run_scan:
                 atr_pct = float((atr_14_val / last_price) * 100)
                 rsi_val = float(compute_rsi(close_5m).iloc[-1])
 
-                # CANDLESTICK TRIGGERS
                 trigger = ""
                 for _, row in df_5m.tail(3).iterrows():
                     body = abs(row['Open'] - row['Close'])
@@ -349,12 +359,9 @@ elif run_scan:
                 
                 prob = float(model.predict_proba(scaler.transform(X_df) if scaler else X_df)[0][1]) if hasattr(model, "predict_proba") else 0.5
                 
-                # -------------------------------------------------------------
-                # DYNAMIC SMC TARGET & SL LOGIC (Liquidity & Invalidation Based)
-                # -------------------------------------------------------------
-                # Major Structural Liquidity Pools (~3 days lookback)
-                major_bsl = float(high_5m.tail(200).max())  # Buy-Side Liquidity
-                major_ssl = float(low_5m.tail(200).min())  # Sell-Side Liquidity
+                # Major Structural Liquidity Pools (~3 days lookback for real institutional targets)
+                major_bsl = float(high_5m.tail(200).max())  
+                major_ssl = float(low_5m.tail(200).min())  
 
                 if best_zone and best_zone['state_val'] >= 1:
                     is_long = "Bullish" in best_zone['type'] or "Low" in best_zone['type']
@@ -362,7 +369,7 @@ elif run_scan:
                     if is_long:
                         sl_price = best_zone['bottom'] - (0.1 * atr_14_val)
                         tgt_price = major_bsl if major_bsl > last_price + (1.5 * atr_14_val) else last_price + (3.0 * atr_14_val)
-                    else: # Short trade
+                    else: 
                         sl_price = best_zone['top'] + (0.1 * atr_14_val)
                         tgt_price = major_ssl if major_ssl < last_price - (1.5 * atr_14_val) else last_price - (3.0 * atr_14_val)
                 else:
@@ -372,7 +379,6 @@ elif run_scan:
                 dyn_tgt_pct = abs((tgt_price - last_price) / last_price) * 100
                 dyn_sl_pct = abs((last_price - sl_price) / last_price) * 100
                 
-                # Flag poor R:R setups directly in the UI string
                 rr_val = dyn_tgt_pct / (dyn_sl_pct + 1e-5)
                 if rr_val < 1.5:
                     smc_ui_str += " ⚠️ LOW R:R"
@@ -381,7 +387,7 @@ elif run_scan:
                 
                 item = {
                     "Stock": ticker, 
-                    "Index": meta["index"],  # RESTORED MISSING INDEX COLUMN
+                    "Index": meta["index"],  
                     "Sector": meta["sector"], 
                     "Last Price": f"₹{last_price:.2f}",
                     "Stock Flow": flow_ui, 
@@ -398,6 +404,11 @@ elif run_scan:
                     "SL_Pct_Num": dyn_sl_pct
                 }
                 item["Rank Score"] = calculate_composite_score(item)
+                
+                # Visual Indicator in UI if Macro Theme was applied
+                if item["Sector"] in active_themes:
+                    item["Stock"] = "📰 " + item["Stock"]
+
                 results.append(item)
             except Exception: continue
 
@@ -416,21 +427,19 @@ if "locked_results" in st.session_state and st.session_state.locked_results is n
         if idx < len(results_df.head(3)):
             row = results_df.iloc[idx]
             with col:
-                # Use .get() to prevent KeyErrors from old cached session state data
+                # NEW: Fixed caching crash using .get()
                 idx_val = row.get('Index', 'N/A')
                 sec_val = row.get('Sector', 'N/A')
-                
-                st.metric(
-                    label=f"#{row['Rank']} {row['Stock']} ({idx_val} | {sec_val})", 
-                    value=row["Last Price"], 
-                    delta=f"Score: {row['Rank Score']} | {row['Stock Flow']}"
-                )
+                st.metric(label=f"#{row['Rank']} {row['Stock']} ({idx_val} | {sec_val})", value=row["Last Price"], delta=f"Score: {row['Rank Score']} | {row['Stock Flow']}")
+                st.write(f"**State:** `{row['Signal State']}`")
+                st.write(f"**Context:** {row['Context & Triggers']}")
+                st.write(f"**Target:** {row['Target']} | **SL:** {row['Stoploss']}")
 
     st.markdown("---")
     st.subheader("📈 LIVE VISUAL CONFIRMATION (Top Ranked Setup)")
     
-    # Plotly interactive chart rendering for the #1 ranked stock
-    top_ticker = results_df.iloc[0]['Stock']
+    # Strip the news emoji for yfinance ticker lookup if it exists
+    top_ticker = results_df.iloc[0]['Stock'].replace("📰 ", "")
     df_5m_chart, _ = fetch_stock_data(top_ticker)
     
     if df_5m_chart is not None and not df_5m_chart.empty:
@@ -441,7 +450,6 @@ if "locked_results" in st.session_state and st.session_state.locked_results is n
             low=df_5m_chart['Low'], close=df_5m_chart['Close'], name="Price"
         )])
         
-        # Overlay the detected SMC Zones on the chart
         top_zones = track_smc_zones(df_5m_chart, lookback=50)
         if top_zones:
             best_z = sorted(top_zones, key=lambda x: x['state_val'], reverse=True)[0]
@@ -460,16 +468,13 @@ if "locked_results" in st.session_state and st.session_state.locked_results is n
     st.markdown("---")
     st.subheader("📊 FULL WATCHLIST & LIFECYCLE STATUS")
     
-    # RESTORED MISSING INDEX COLUMN IN DISPLAY LIST
     display_cols = [
         "Rank", "Stock", "Index", "Sector", "Stock Flow", "Rank Score", 
         "Last Price", "Day Trend", "Signal State", "Context & Triggers", 
         "Target", "Stoploss", "AI Prob"
     ]
     
-    # Fixed Table Display with custom height so all rows are easily visible
     st.dataframe(results_df[display_cols], height=500, use_container_width=True)
     
-    # CSV Download Option for Offline Inspection
     csv = results_df[display_cols].to_csv(index=False).encode('utf-8')
     st.download_button("📥 Download Full Scan Results (CSV)", data=csv, file_name="smc_scan_results.csv", mime="text/csv")
