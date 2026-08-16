@@ -182,9 +182,9 @@ def fetch_stock_data(ticker):
     df_1d = yf.download(yf_symbol, period="1mo", interval="1d", progress=False, auto_adjust=True)
     return df_5m, df_1d
 
-# --- 4. AUTOMATED LIVE NEWS & PRICED-IN ENGINE ---
+# --- 4. AUTOMATED LIVE NEWS & PRICED-IN ENGINE (REALISTIC UPGRADE) ---
 def evaluate_live_news(ticker, df_5m):
-    """Fetches stock news, calculates sentiment, time decay, and checks if priced in."""
+    """Fetches news, scales historical impact, persists through weekends, and detects Gap Traps."""
     try:
         yf_symbol = f"{ticker}.NS" if not ticker.endswith(".NS") else ticker
         stock_info = yf.Ticker(yf_symbol)
@@ -196,39 +196,63 @@ def evaluate_live_news(ticker, df_5m):
         latest_news = news_items[0]
         headline = latest_news.get("title", "")
         pub_time = latest_news.get("providerPublishTime", time.time())
-        age_minutes = (time.time() - pub_time) / 60
         
-        bullish_keywords = ["surge", "profit", "jump", "buy", "upgrades", "growth", "wins", "order", "record", "approves", "soars"]
-        bearish_keywords = ["fall", "drop", "loss", "sell", "downgrades", "slump", "misses", "probe", "cuts", "crash", "plunges"]
+        # Convert to hours to safely handle Overnights & Weekends
+        age_hours = (time.time() - pub_time) / 3600.0
+        
+        # --- 1. HISTORICAL IMPACT TIERS ---
+        # Keywords that historically force massive institutional flows & heavy gaps
+        tier_1_bullish = ["merger", "acquisition", "record", "breakthrough", "bonus", "split", "dividend", "q1", "q2", "q3", "q4", "pact", "soars"]
+        tier_1_bearish = ["fraud", "sebi", "cbi", "resigns", "bankruptcy", "default", "scam", "probe", "downgrade", "plunges", "crash"]
+        
+        # Routine day-to-day news
+        tier_2_bullish = ["surge", "profit", "jump", "buy", "upgrades", "growth", "wins", "order", "approves", "higher"]
+        tier_2_bearish = ["fall", "drop", "loss", "sell", "slump", "misses", "cuts", "lower"]
         
         headline_lower = headline.lower()
         sentiment = 0
-        if any(w in headline_lower for w in bullish_keywords): sentiment = 1
-        elif any(w in headline_lower for w in bearish_keywords): sentiment = -1
+        multiplier = 1.0
+
+        # Tier 1 events carry a 2x institutional weight multiplier
+        if any(w in headline_lower for w in tier_1_bullish): 
+            sentiment, multiplier = 1, 2.0  
+        elif any(w in headline_lower for w in tier_1_bearish): 
+            sentiment, multiplier = -1, 2.0 
+        elif any(w in headline_lower for w in tier_2_bullish): 
+            sentiment, multiplier = 1, 1.0
+        elif any(w in headline_lower for w in tier_2_bearish): 
+            sentiment, multiplier = -1, 1.0
         
         if sentiment == 0:
             return 0.0, f"News: {headline[:30]}..."
             
-        if age_minutes <= 60:
-            base_score = 20.0 * sentiment
-            status = "⚡ FRESH NEWS"
-        elif age_minutes <= 360:
-            base_score = 10.0 * sentiment
-            status = "⏳ DEVELOPING"
+        # --- 2. REALISTIC TIME DECAY (WEEKEND/MONDAY OPEN FIX) ---
+        # Instead of dying after 6 hours, we map to actual market phases
+        if age_hours <= 2:
+            base_score = 20.0 * sentiment * multiplier
+            status = "⚡ LIVE BREAKING"
+        elif age_hours <= 18:  # Captured from yesterday's close / overnight
+            base_score = 15.0 * sentiment * multiplier
+            status = "🌙 OVERNIGHT CATALYST"
+        elif age_hours <= 72:  # Captures Friday/Weekend news for Monday's open
+            base_score = 12.0 * sentiment * multiplier
+            status = "📅 WEEKEND CATALYST"
         else:
             base_score = 0.0
-            status = "🕰️ OUTDATED"
+            status = "🕰️ OLD/DIGESTED"
             
-        # Priced-In Reality Check
-        if len(df_5m) > 20 and sentiment != 0:
-            recent_return = ((df_5m['Close'].iloc[-1] - df_5m['Close'].iloc[-20]) / df_5m['Close'].iloc[-20]) * 100
-            avg_vol = df_5m['Volume'].tail(40).mean()
-            recent_vol_spike = df_5m['Volume'].iloc[-1] / (avg_vol + 1e-5)
-
-            if sentiment == 1 and age_minutes > 45 and recent_return > 2.0 and recent_vol_spike > 1.5:
-                return -15.0, f"🛑 PRICED-IN TRAP (+{recent_return:.1f}%): {headline[:25]}..."
+        # --- 3. PRICED-IN "GAP TRAP" REALITY CHECK ---
+        # Even if news is massive, if the market ALREADY gapped heavily at the open, we back off.
+        if len(df_5m) > 20 and sentiment != 0 and age_hours > 0.5:
+            # Measure return against recent structural anchor (approx 100 mins ago)
+            recent_return = ((df_5m['Close'].iloc[-1] - df_5m['Open'].iloc[-20]) / df_5m['Open'].iloc[-20]) * 100
             
-            if sentiment == -1 and age_minutes > 45 and recent_return < -2.0 and recent_vol_spike > 1.5:
+            # Protect against chasing a massive +3% gap-up on Monday morning
+            if sentiment == 1 and recent_return > 3.0:
+                return -15.0, f"🛑 GAP TRAP (+{recent_return:.1f}%): {headline[:25]}..."
+            
+            # Protect against shorting the absolute bottom of a panic dump
+            if sentiment == -1 and recent_return < -3.0:
                 return 15.0, f"🛑 EXHAUSTED SELL ({recent_return:.1f}%): {headline[:25]}..."
                 
         return base_score, f"{status}: {headline[:35]}..."
