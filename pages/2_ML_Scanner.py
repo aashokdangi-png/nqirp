@@ -38,7 +38,6 @@ expected_features = list(model.feature_names_in_) if hasattr(model, "feature_nam
 
 st.sidebar.success(f"✅ AI Engine Configured: {len(expected_features)} Features")
 
-# Discretionary Quant Macro Bias (All 12 Original Sectors)
 st.sidebar.markdown("---")
 st.sidebar.markdown("### 🏛️ Official Regulatory & Macro Catalysts")
 active_macro_events = st.sidebar.multiselect(
@@ -48,9 +47,9 @@ active_macro_events = st.sidebar.multiselect(
 )
 
 active_sectors = st.sidebar.multiselect(
-    "Select Sectors with Verified Corporate Filings:", 
+    "Select Focus Sectors:", 
     ["Banking", "IT", "Auto", "Energy", "FMCG", "Metal", "Infra", "Financials", "Telecom", "Capital Goods", "Healthcare", "Consumer Durables"],
-    help="Sectors with confirmed Board Meetings, Financial Results, or Material Event filings under SEBI LODR."
+    help="Sectors to monitor for confirmed corporate filings."
 )
 st.sidebar.info("🎯 NSE/BSE Filing Ingestion, Semantic Scoring & Gap Risk Validators Active.")
 
@@ -209,42 +208,42 @@ def fetch_stock_data(ticker):
     df_1d = yf.download(yf_symbol, period="1mo", interval="1d", progress=False, auto_adjust=True)
     return df_5m, df_1d
 
-# --- 5. OFFICIAL NSE/BSE CORPORATE FILING & SEMANTIC IMPACT ENGINE ---
+# --- 5. STRICT OFFICIAL NSE/BSE CORPORATE FILING ENGINE ---
 COMPANY_FILING_QUERIES = {
-    "RELIANCE": "Reliance Industries corporate filing stock exchange NSE BSE",
-    "TCS": "Tata Consultancy Services corporate filing stock exchange NSE BSE",
-    "HDFCBANK": "HDFC Bank corporate filing stock exchange NSE BSE",
-    "INFY": "Infosys corporate filing stock exchange NSE BSE",
-    "ICICIBANK": "ICICI Bank corporate filing stock exchange NSE BSE",
-    "SBIN": "State Bank of India corporate filing stock exchange NSE BSE",
-    "BHARTIARTL": "Bharti Airtel corporate filing stock exchange NSE BSE",
-    "ITC": "ITC corporate filing stock exchange NSE BSE",
-    "LTIM": "LTIMindtree corporate filing stock exchange NSE BSE",
-    "AXISBANK": "Axis Bank corporate filing stock exchange NSE BSE",
-    "KOTAKBANK": "Kotak Mahindra Bank corporate filing stock exchange NSE BSE",
-    "LT": "Larsen and Toubro corporate filing stock exchange NSE BSE",
-    "HINDUNILVR": "Hindustan Unilever corporate filing stock exchange NSE BSE",
-    "BAJFINANCE": "Bajaj Finance corporate filing stock exchange NSE BSE",
-    "MARUTI": "Maruti Suzuki corporate filing stock exchange NSE BSE",
-    "TATASTEEL": "Tata Steel corporate filing stock exchange NSE BSE",
-    "NTPC": "NTPC corporate filing stock exchange NSE BSE",
-    "M&M": "Mahindra and Mahindra corporate filing stock exchange NSE BSE",
-    "TATAPOWER": "Tata Power corporate filing stock exchange NSE BSE",
-    "FEDERALBNK": "Federal Bank corporate filing stock exchange NSE BSE",
-    "POLYCAB": "Polycab corporate filing stock exchange NSE BSE",
-    "PERSISTENT": "Persistent Systems corporate filing stock exchange NSE BSE",
-    "COFORGE": "Coforge corporate filing stock exchange NSE BSE",
-    "ASHOKLEY": "Ashok Leyland corporate filing stock exchange NSE BSE",
-    "MAXHEALTH": "Max Healthcare corporate filing stock exchange NSE BSE",
-    "VOLTAS": "Voltas corporate filing stock exchange NSE BSE",
-    "CDSL": "CDSL corporate filing stock exchange NSE BSE",
-    "ANGELONE": "Angel One corporate filing stock exchange NSE BSE",
-    "KFINTECH": "KFin Technologies corporate filing stock exchange NSE BSE",
-    "SUZLON": "Suzlon Energy corporate filing stock exchange NSE BSE",
-    "BSOFT": "Birlasoft corporate filing stock exchange NSE BSE",
-    "HFCL": "HFCL corporate filing stock exchange NSE BSE",
-    "IEX": "Indian Energy Exchange corporate filing stock exchange NSE BSE",
-    "KEI": "KEI Industries corporate filing stock exchange NSE BSE"
+    "RELIANCE": "Reliance Industries corporate filing NSE BSE announcement",
+    "TCS": "Tata Consultancy Services corporate filing NSE BSE announcement",
+    "HDFCBANK": "HDFC Bank corporate filing NSE BSE announcement",
+    "INFY": "Infosys corporate filing NSE BSE announcement",
+    "ICICIBANK": "ICICI Bank corporate filing NSE BSE announcement",
+    "SBIN": "State Bank of India corporate filing NSE BSE announcement",
+    "BHARTIARTL": "Bharti Airtel corporate filing NSE BSE announcement",
+    "ITC": "ITC corporate filing NSE BSE announcement",
+    "LTIM": "LTIMindtree corporate filing NSE BSE announcement",
+    "AXISBANK": "Axis Bank corporate filing NSE BSE announcement",
+    "KOTAKBANK": "Kotak Mahindra Bank corporate filing NSE BSE announcement",
+    "LT": "Larsen and Toubro corporate filing NSE BSE announcement",
+    "HINDUNILVR": "Hindustan Unilever corporate filing NSE BSE announcement",
+    "BAJFINANCE": "Bajaj Finance corporate filing NSE BSE announcement",
+    "MARUTI": "Maruti Suzuki corporate filing NSE BSE announcement",
+    "TATASTEEL": "Tata Steel corporate filing NSE BSE announcement",
+    "NTPC": "NTPC corporate filing NSE BSE announcement",
+    "M&M": "Mahindra and Mahindra corporate filing NSE BSE announcement",
+    "TATAPOWER": "Tata Power corporate filing NSE BSE announcement",
+    "FEDERALBNK": "Federal Bank corporate filing NSE BSE announcement",
+    "POLYCAB": "Polycab corporate filing NSE BSE announcement",
+    "PERSISTENT": "Persistent Systems corporate filing NSE BSE announcement",
+    "COFORGE": "Coforge corporate filing NSE BSE announcement",
+    "ASHOKLEY": "Ashok Leyland corporate filing NSE BSE announcement",
+    "MAXHEALTH": "Max Healthcare corporate filing NSE BSE announcement",
+    "VOLTAS": "Voltas corporate filing NSE BSE announcement",
+    "CDSL": "CDSL corporate filing NSE BSE announcement",
+    "ANGELONE": "Angel One corporate filing NSE BSE announcement",
+    "KFINTECH": "KFin Technologies corporate filing NSE BSE announcement",
+    "SUZLON": "Suzlon Energy corporate filing NSE BSE announcement",
+    "BSOFT": "Birlasoft corporate filing NSE BSE announcement",
+    "HFCL": "HFCL corporate filing NSE BSE announcement",
+    "IEX": "Indian Energy Exchange corporate filing NSE BSE announcement",
+    "KEI": "KEI Industries corporate filing NSE BSE announcement"
 }
 
 def evaluate_official_filings(ticker, df_5m):
@@ -269,6 +268,12 @@ def evaluate_official_filings(ticker, df_5m):
         pub_date_elem = item.find('pubDate')
         pub_date_str = pub_date_elem.text if pub_date_elem is not None else ""
 
+        # Strict Validation: Ensure the article is genuinely about this stock/company
+        title_lower = title_text.lower()
+        clean_ticker = ticker.lower()
+        if clean_ticker not in title_lower and not any(part in title_lower for part in clean_ticker.split('.')):
+            return 0.0, "No direct filing match"
+
         try:
             pub_dt = parsedate_to_datetime(pub_date_str)
             pub_time = pub_dt.timestamp()
@@ -276,7 +281,6 @@ def evaluate_official_filings(ticker, df_5m):
             pub_time = time.time()
 
         age_hours = (time.time() - pub_time) / 3600.0
-        filing_lower = title_text.lower()
 
         # Semantic Classification under SEBI LODR Regulations
         tier_1_bullish = ["financial results", "net profit up", "order win", "secures contract", "bonus issue", "buyback", "board meeting outcome", "dividend declared", "acquisition"]
@@ -288,13 +292,13 @@ def evaluate_official_filings(ticker, df_5m):
         sentiment = 0
         multiplier = 1.0
 
-        if any(w in filing_lower for w in tier_1_bullish):
+        if any(w in title_lower for w in tier_1_bullish):
             sentiment, multiplier = 1, 2.0
-        elif any(w in filing_lower for w in tier_1_bearish):
+        elif any(w in title_lower for w in tier_1_bearish):
             sentiment, multiplier = -1, 2.0
-        elif any(w in filing_lower for w in tier_2_bullish):
+        elif any(w in title_lower for w in tier_2_bullish):
             sentiment, multiplier = 1, 1.0
-        elif any(w in filing_lower for w in tier_2_bearish):
+        elif any(w in title_lower for w in tier_2_bearish):
             sentiment, multiplier = -1, 1.0
 
         if sentiment == 0:
@@ -394,9 +398,11 @@ def calculate_composite_score(row, filing_score=0.0):
     is_long = "Bullish" in smc_str or "LOW" in smc_str or row.get("Day Trend") == "Uptrend"
     
     score_align = 15.0 if (is_long and stock_flow > 0) or (not is_long and stock_flow < 0) else -10.0
-    score_macro_manual = 20.0 if row.get("Sector") in active_sectors else 0.0
+    
+    # Only award sector macro score if stock belongs to selected focus sector AND has active momentum/flow alignment
+    score_sector = 15.0 if row.get("Sector") in active_sectors and stock_flow != 0 else 0.0
 
-    return max(0.0, round(score_ai + smc_score + score_rr + score_align + score_macro_manual + filing_score, 2))
+    return max(0.0, round(score_ai + smc_score + score_rr + score_align + score_sector + filing_score, 2))
 
 # --- 7. CORE SCANNER ENGINE ---
 if "locked_results" not in st.session_state: st.session_state.locked_results = None
@@ -407,7 +413,7 @@ run_scan = st.button("🚀 Run Institutional Scan & Rank", type="primary")
 if lock_signals and st.session_state.locked_results is not None:
     results_df = st.session_state.locked_results
 elif run_scan:
-    with st.spinner("Ingesting SEBI LODR filings, order flow, & cross-referencing SMC liquidity zones..."):
+    with st.spinner("Ingesting verified SEBI LODR filings, order flow, & cross-referencing SMC zones..."):
         results = []
         market_sentiment = float(market_returns.get("Nifty_1D_Return", 0.0)) * 100
 
@@ -502,7 +508,8 @@ elif run_scan:
                 }
                 item["Rank Score"] = calculate_composite_score(item, filing_score)
                 
-                if filing_score != 0 or item["Sector"] in active_sectors:
+                # Tag with 🏛️ ONLY if there is a legitimate verified filing catalyst
+                if filing_score > 0 and "LODR" in filing_context:
                     item["Stock"] = "🏛️ " + item["Stock"]
 
                 results.append(item)
