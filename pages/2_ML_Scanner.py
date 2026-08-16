@@ -169,23 +169,40 @@ st.markdown("---")
 
 # --- 4. UNIVERSE SETUP & METADATA REGISTRY ---
 STOCK_METADATA = {
-    "RELIANCE": {"index": "Nifty 50", "sector": "Energy"}, "TCS": {"index": "Nifty 50", "sector": "IT"},
-    "HDFCBANK": {"index": "Nifty 50", "sector": "Banking"}, "INFY": {"index": "Nifty 50", "sector": "IT"},
-    "ICICIBANK": {"index": "Nifty 50", "sector": "Banking"}, "SBIN": {"index": "Nifty 50", "sector": "Banking"},
-    "BHARTIARTL": {"index": "Nifty 50", "sector": "Telecom"}, "ITC": {"index": "Nifty 50", "sector": "FMCG"},
-    "LTIM": {"index": "Nifty 50", "sector": "IT"}, "AXISBANK": {"index": "Nifty 50", "sector": "Banking"},
-    "KOTAKBANK": {"index": "Nifty 50", "sector": "Banking"}, "LT": {"index": "Nifty 50", "sector": "Infra"},
-    "HINDUNILVR": {"index": "Nifty 50", "sector": "FMCG"}, "BAJFINANCE": {"index": "Nifty 50", "sector": "Financials"},
-    "MARUTI": {"index": "Nifty 50", "sector": "Auto"}, "TATASTEEL": {"index": "Nifty 50", "sector": "Metal"},
-    "NTPC": {"index": "Nifty 50", "sector": "Energy"}, "M&M": {"index": "Nifty 50", "sector": "Auto"},
-    "TATAPOWER": {"index": "Nifty Midcap", "sector": "Energy"}, "FEDERALBNK": {"index": "Nifty Midcap", "sector": "Banking"},
-    "POLYCAB": {"index": "Nifty Midcap", "sector": "Capital Goods"}, "PERSISTENT": {"index": "Nifty Midcap", "sector": "IT"},
-    "COFORGE": {"index": "Nifty Midcap", "sector": "IT"}, "ASHOKLEY": {"index": "Nifty Midcap", "sector": "Auto"},
-    "MAXHEALTH": {"index": "Nifty Midcap", "sector": "Healthcare"}, "VOLTAS": {"index": "Nifty Midcap", "sector": "Consumer Durables"},
-    "CDSL": {"index": "Nifty Smallcap", "sector": "Financials"}, "ANGELONE": {"index": "Nifty Smallcap", "sector": "Financials"},
-    "KFINTECH": {"index": "Nifty Smallcap", "sector": "Financials"}, "SUZLON": {"index": "Nifty Smallcap", "sector": "Energy"},
-    "BSOFT": {"index": "Nifty Smallcap", "sector": "IT"}, "HFCL": {"index": "Nifty Smallcap", "sector": "Infra"},
-    "IEX": {"index": "Nifty Smallcap", "sector": "Financials"}, "KEI": {"index": "Nifty Smallcap", "sector": "Capital Goods"}
+    "RELIANCE": {"index": "Nifty 50", "sector": "Energy", "name_query": "reliance industries"},
+    "TCS": {"index": "Nifty 50", "sector": "IT", "name_query": "tata consultancy"},
+    "HDFCBANK": {"index": "Nifty 50", "sector": "Banking", "name_query": "hdfc bank"},
+    "INFY": {"index": "Nifty 50", "sector": "IT", "name_query": "infosys"},
+    "ICICIBANK": {"index": "Nifty 50", "sector": "Banking", "name_query": "icici bank"},
+    "SBIN": {"index": "Nifty 50", "sector": "Banking", "name_query": "state bank of india"},
+    "BHARTIARTL": {"index": "Nifty 50", "sector": "Telecom", "name_query": "bharti airtel"},
+    "ITC": {"index": "Nifty 50", "sector": "FMCG", "name_query": "itc limited"},
+    "LTIM": {"index": "Nifty 50", "sector": "IT", "name_query": "ltimindtree"},
+    "AXISBANK": {"index": "Nifty 50", "sector": "Banking", "name_query": "axis bank"},
+    "KOTAKBANK": {"index": "Nifty 50", "sector": "Banking", "name_query": "kotak mahindra"},
+    "LT": {"index": "Nifty 50", "sector": "Infra", "name_query": "larsen toubro"},
+    "HINDUNILVR": {"index": "Nifty 50", "sector": "FMCG", "name_query": "hindustan unilever"},
+    "BAJFINANCE": {"index": "Nifty 50", "sector": "Financials", "name_query": "bajaj finance"},
+    "MARUTI": {"index": "Nifty 50", "sector": "Auto", "name_query": "maruti suzuki"},
+    "TATASTEEL": {"index": "Nifty 50", "sector": "Metal", "name_query": "tata steel"},
+    "NTPC": {"index": "Nifty 50", "sector": "Energy", "name_query": "ntpc"},
+    "M&M": {"index": "Nifty 50", "sector": "Auto", "name_query": "mahindra"},
+    "TATAPOWER": {"index": "Nifty Midcap", "sector": "Energy", "name_query": "tata power"},
+    "FEDERALBNK": {"index": "Nifty Midcap", "sector": "Banking", "name_query": "federal bank"},
+    "POLYCAB": {"index": "Nifty Midcap", "sector": "Capital Goods", "name_query": "polycab"},
+    "PERSISTENT": {"index": "Nifty Midcap", "sector": "IT", "name_query": "persistent systems"},
+    "COFORGE": {"index": "Nifty Midcap", "sector": "IT", "name_query": "coforge"},
+    "ASHOKLEY": {"index": "Nifty Midcap", "sector": "Auto", "name_query": "ashok leyland"},
+    "MAXHEALTH": {"index": "Nifty Midcap", "sector": "Healthcare", "name_query": "max healthcare"},
+    "VOLTAS": {"index": "Nifty Midcap", "sector": "Consumer Durables", "name_query": "voltas"},
+    "CDSL": {"index": "Nifty Smallcap", "sector": "Financials", "name_query": "cdsl"},
+    "ANGELONE": {"index": "Nifty Smallcap", "sector": "Financials", "name_query": "angel one"},
+    "KFINTECH": {"index": "Nifty Smallcap", "sector": "Financials", "name_query": "kfintech"},
+    "SUZLON": {"index": "Nifty Smallcap", "sector": "Energy", "name_query": "suzlon"},
+    "BSOFT": {"index": "Nifty Smallcap", "sector": "IT", "name_query": "birlasoft"},
+    "HFCL": {"index": "Nifty Smallcap", "sector": "Infra", "name_query": "hfcl"},
+    "IEX": {"index": "Nifty Smallcap", "sector": "Financials", "name_query": "indian energy exchange"},
+    "KEI": {"index": "Nifty Smallcap", "sector": "Capital Goods", "name_query": "kei industries"}
 }
 
 scan_category = st.selectbox("Select Universe", [f"All Combined ({len(STOCK_METADATA)} Stocks)", "Nifty 50", "Nifty Midcap", "Nifty Smallcap"])
@@ -268,10 +285,13 @@ def evaluate_official_filings(ticker, df_5m):
         pub_date_elem = item.find('pubDate')
         pub_date_str = pub_date_elem.text if pub_date_elem is not None else ""
 
-        # Strict Validation: Ensure the article is genuinely about this stock/company
+        # Flexible Validation: Ensure the article matches either ticker or company name keywords
         title_lower = title_text.lower()
         clean_ticker = ticker.lower()
-        if clean_ticker not in title_lower and not any(part in title_lower for part in clean_ticker.split('.')):
+        meta_info = STOCK_METADATA.get(ticker, {})
+        name_keyword = meta_info.get("name_query", clean_ticker)
+        
+        if clean_ticker not in title_lower and not any(kw in title_lower for kw in name_keyword.split()):
             return 0.0, "No direct filing match"
 
         try:
@@ -283,10 +303,10 @@ def evaluate_official_filings(ticker, df_5m):
         age_hours = (time.time() - pub_time) / 3600.0
 
         # Semantic Classification under SEBI LODR Regulations
-        tier_1_bullish = ["financial results", "net profit up", "order win", "secures contract", "bonus issue", "buyback", "board meeting outcome", "dividend declared", "acquisition"]
+        tier_1_bullish = ["financial results", "net profit up", "order win", "secures contract", "bonus issue", "buyback", "board meeting outcome", "dividend declared", "acquisition", "results", "profit"]
         tier_1_bearish = ["sebi penalty", "investigation", "default", "fraud", "resignation", "net profit down", "cbi raid", "adverse ruling"]
 
-        tier_2_bullish = ["capacity expansion", "joint venture", "rating upgrade", "institutional placement"]
+        tier_2_bullish = ["capacity expansion", "joint venture", "rating upgrade", "institutional placement", "expansion"]
         tier_2_bearish = ["margin compression", "rating downgrade", "factory shutdown", "strike"]
 
         sentiment = 0
@@ -399,7 +419,6 @@ def calculate_composite_score(row, filing_score=0.0):
     
     score_align = 15.0 if (is_long and stock_flow > 0) or (not is_long and stock_flow < 0) else -10.0
     
-    # Only award sector macro score if stock belongs to selected focus sector AND has active momentum/flow alignment
     score_sector = 15.0 if row.get("Sector") in active_sectors and stock_flow != 0 else 0.0
 
     return max(0.0, round(score_ai + smc_score + score_rr + score_align + score_sector + filing_score, 2))
@@ -508,8 +527,8 @@ elif run_scan:
                 }
                 item["Rank Score"] = calculate_composite_score(item, filing_score)
                 
-                # Tag with 🏛️ ONLY if there is a legitimate verified filing catalyst
-                if filing_score > 0 and "LODR" in filing_context:
+                # Tag with 🏛️ if there is any verified active filing/disclosure catalyst
+                if filing_score != 0:
                     item["Stock"] = "🏛️ " + item["Stock"]
 
                 results.append(item)
