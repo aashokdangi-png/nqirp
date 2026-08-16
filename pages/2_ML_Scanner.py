@@ -45,7 +45,28 @@ active_themes = st.sidebar.multiselect(
 )
 st.sidebar.info("🎯 Dynamic SMC Tracking, Auto-News Fetching & Priced-In Validators Active.")
 
-# --- 2. INDEX, SECTOR SENTIMENT & FII/DII ORDER FLOW ---
+# --- 2. TECHNICAL HELPER FUNCTIONS ---
+def compute_rsi(series, period=14):
+    delta = series.diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
+    rs = gain / (loss + 1e-5)
+    return 100 - (100 / (1 + rs))
+
+def detect_chart_patterns(df_5m):
+    patterns = []
+    if len(df_5m) < 20:
+        return patterns
+    close = df_5m['Close']
+    high = df_5m['High']
+    
+    recent_high = high.tail(20).max()
+    if close.tail(5).mean() > close.tail(20).mean() and high.iloc[-1] >= recent_high * 0.995:
+        patterns.append("Bull Flag Breakout")
+    
+    return patterns
+
+# --- 3. INDEX, SECTOR SENTIMENT & FII/DII ORDER FLOW ---
 SECTOR_MAP = {
     "Banking": "^NSEBANK", "IT": "^CNXIT", "Auto": "^CNXAUTO",
     "Energy": "^CNXENERGY", "FMCG": "^CNXFMCG", "Metal": "^CNXMETAL",
@@ -90,7 +111,6 @@ def fetch_market_data_and_flow():
         returns["Nifty_1D_Return"] = get_1d_return("^NSEI")
         returns["Midcap_1D_Return"] = get_1d_return("^NSEMDCP50")
         
-        # Robust Nifty Smallcap Sentiment Resolver
         sml_ret = 0.0
         for sml_t in ["NIFTYSMALL100.NS", "^CNXSC", "^CNXSMLCAP"]:
             r = get_1d_return(sml_t)
@@ -102,7 +122,6 @@ def fetch_market_data_and_flow():
         trends["^NSEMDCP50"] = f"{'+' if returns['Midcap_1D_Return'] >= 0 else ''}{returns['Midcap_1D_Return']*100:.2f}%"
         trends["Smallcap"] = f"{'+' if sml_ret >= 0 else ''}{sml_ret*100:.2f}%"
 
-        # Sector Performance Resolver
         for sector_name, sec_ticker in SECTOR_MAP.items():
             r = get_1d_return(sec_ticker)
             if abs(r) < 1e-5 and sector_name in SECTOR_CONSTITUENTS:
@@ -140,7 +159,7 @@ for idx, sec in enumerate(["Banking", "IT", "Auto", "Energy", "FMCG", "Metal"]):
     sec_cols[idx % 6].metric(sec, f"{'+' if sec_ret >= 0 else ''}{sec_ret:.2f}%")
 st.markdown("---")
 
-# --- 3. UNIVERSE SETUP & METADATA REGISTRY ---
+# --- 4. UNIVERSE SETUP & METADATA REGISTRY ---
 STOCK_METADATA = {
     "RELIANCE": {"index": "Nifty 50", "sector": "Energy"}, "TCS": {"index": "Nifty 50", "sector": "IT"},
     "HDFCBANK": {"index": "Nifty 50", "sector": "Banking"}, "INFY": {"index": "Nifty 50", "sector": "IT"},
@@ -168,7 +187,6 @@ elif scan_category == "Nifty Smallcap": selected_tickers = [k for k, v in STOCK_
 else: selected_tickers = list(STOCK_METADATA.keys())
 
 def fetch_stock_data(ticker):
-    # Upstox Client Integration Hook
     if "upstox_client" in st.session_state and st.session_state.get("upstox_client"):
         try:
             upstox = st.session_state["upstox_client"]
@@ -182,9 +200,7 @@ def fetch_stock_data(ticker):
     df_1d = yf.download(yf_symbol, period="1mo", interval="1d", progress=False, auto_adjust=True)
     return df_5m, df_1d
 
-# --- 4. AUTOMATED LIVE NEWS & PRICED-IN ENGINE (STRICT FILTERING FIX) ---
-
-# Map tickers to clean search names to prevent market-wide news leakage
+# --- 5. AUTOMATED LIVE NEWS & PRICED-IN ENGINE ---
 COMPANY_NAMES = {
     "RELIANCE": ["reliance"], "TCS": ["tcs", "tata consultancy"], "HDFCBANK": ["hdfc bank", "hdfcbank"],
     "INFY": ["infosys", "infy"], "ICICIBANK": ["icici bank", "icicibank"], "SBIN": ["sbi", "state bank"],
@@ -201,7 +217,6 @@ COMPANY_NAMES = {
 }
 
 def evaluate_live_news(ticker, df_5m):
-    """Fetches high-conviction company news, filters out generic noise, and prevents gap-trap buys."""
     try:
         yf_symbol = f"{ticker}.NS" if not ticker.endswith(".NS") else ticker
         stock_info = yf.Ticker(yf_symbol)
@@ -210,12 +225,11 @@ def evaluate_live_news(ticker, df_5m):
         if not news_items:
             return 0.0, "No active news"
 
-        # Search recent news articles for a headline that specifically mentions this company
         valid_headline = None
         pub_time = time.time()
         company_aliases = COMPANY_NAMES.get(ticker, [ticker.lower()])
 
-        for item in news_items[:5]:  # Inspect top 5 recent articles
+        for item in news_items[:5]:
             title = item.get("title", "")
             title_lower = title.lower()
             if any(alias in title_lower for alias in company_aliases):
@@ -223,14 +237,12 @@ def evaluate_live_news(ticker, df_5m):
                 pub_time = item.get("providerPublishTime", time.time())
                 break
         
-        # If no headline directly names this stock, treat as NO SPECIFIC NEWS
         if not valid_headline:
             return 0.0, "No stock-specific news"
 
         age_hours = (time.time() - pub_time) / 3600.0
         headline_lower = valid_headline.lower()
 
-        # HIGH-CONVICTION CATALYST KEYWORDS (Stripped of generic market noise like "buy", "growth", "up", "fall")
         tier_1_bullish = ["merger", "acquisition", "q1 result", "q2 result", "q3 result", "q4 result", "net profit up", "secures contract", "fda approval", "bonus issue", "buyback", "order win"]
         tier_1_bearish = ["sebi", "cbi raid", "fraud", "default", "bankruptcy", "net profit down", "resignation", "penalty", "ban", "investigation"]
 
@@ -249,11 +261,9 @@ def evaluate_live_news(ticker, df_5m):
         elif any(w in headline_lower for w in tier_2_bearish):
             sentiment, multiplier = -1, 1.0
 
-        # Neutral / Non-catalyst headlines receive 0 score
         if sentiment == 0:
             return 0.0, f"Routine: {valid_headline[:30]}..."
 
-        # Time Decay Matrix (Sustains Friday night / Weekend news for Monday open)
         if age_hours <= 2:
             base_score = 20.0 * sentiment * multiplier
             status = "⚡ BREAKING"
@@ -266,7 +276,6 @@ def evaluate_live_news(ticker, df_5m):
         else:
             return 0.0, f"Outdated: {valid_headline[:30]}..."
 
-        # Gap Trap Protection (Prevents buying the top of a Monday gap-up)
         if len(df_5m) > 20 and age_hours > 0.5:
             recent_return = ((df_5m['Close'].iloc[-1] - df_5m['Open'].iloc[-20]) / df_5m['Open'].iloc[-20]) * 100
             if sentiment == 1 and recent_return > 3.0:
@@ -279,7 +288,7 @@ def evaluate_live_news(ticker, df_5m):
     except Exception:
         return 0.0, "News API Offline"
 
-# --- 5. FULL LIFECYCLE ENGINE (BULLISH/BEARISH OBs & SWEEPS) ---
+# --- 6. FULL LIFECYCLE ENGINE ---
 def track_smc_zones(df_5m, lookback=50):
     last_price = float(df_5m['Close'].iloc[-1])
     last_low, last_high = float(df_5m['Low'].iloc[-1]), float(df_5m['High'].iloc[-1])
@@ -289,7 +298,6 @@ def track_smc_zones(df_5m, lookback=50):
     actual_lookback = min(lookback, len(df_5m) - 3)
     
     for i in range(len(df_5m) - actual_lookback, len(df_5m) - 1):
-        # 1. BULLISH OB
         if df_5m['Close'].iloc[i] < df_5m['Open'].iloc[i] and df_5m['Close'].iloc[i+1] > df_5m['Open'].iloc[i+1]:
             ob_top, ob_bottom = float(df_5m['High'].iloc[i]), float(df_5m['Low'].iloc[i])
             if not (df_5m['Close'].iloc[i+1:-1] < ob_bottom).any():
@@ -301,7 +309,6 @@ def track_smc_zones(df_5m, lookback=50):
                 else: state, state_val = "⏸️ ZONE CREATED", 0
                 active_zones.append({'type': 'Bullish OB', 'top': ob_top, 'bottom': ob_bottom, 'age': len(df_5m)-1-i, 'state': state, 'state_val': state_val})
 
-        # 2. BEARISH OB
         if df_5m['Close'].iloc[i] > df_5m['Open'].iloc[i] and df_5m['Close'].iloc[i+1] < df_5m['Open'].iloc[i+1]:
             ob_top, ob_bottom = float(df_5m['High'].iloc[i]), float(df_5m['Low'].iloc[i])
             if not (df_5m['Close'].iloc[i+1:-1] > ob_top).any():
@@ -313,7 +320,6 @@ def track_smc_zones(df_5m, lookback=50):
                 else: state, state_val = "⏸️ ZONE CREATED", 0
                 active_zones.append({'type': 'Bearish OB', 'top': ob_top, 'bottom': ob_bottom, 'age': len(df_5m)-1-i, 'state': state, 'state_val': state_val})
 
-        # 3. LIQUIDITY SWEEP LOW
         if i > 15:
             recent_min = float(df_5m['Low'].iloc[i-15:i].min())
             if df_5m['Low'].iloc[i] < recent_min and df_5m['Close'].iloc[i] > recent_min:
@@ -324,7 +330,6 @@ def track_smc_zones(df_5m, lookback=50):
                     else: state, state_val = "⏸️ ZONE CREATED", 0
                     active_zones.append({'type': 'Sweep Low', 'top': sweep_lvl * 1.001, 'bottom': sweep_lvl, 'age': len(df_5m)-1-i, 'state': state, 'state_val': state_val})
                     
-        # 4. LIQUIDITY SWEEP HIGH
         if i > 15:
             recent_max = float(df_5m['High'].iloc[i-15:i].max())
             if df_5m['High'].iloc[i] > recent_max and df_5m['Close'].iloc[i] < recent_max:
@@ -356,7 +361,7 @@ def calculate_composite_score(row, news_score=0.0):
 
     return max(0.0, round(score_ai + smc_score + score_rr + score_align + score_macro_manual + news_score, 2))
 
-# --- 6. CORE SCANNER ENGINE ---
+# --- 7. CORE SCANNER ENGINE ---
 if "locked_results" not in st.session_state: st.session_state.locked_results = None
 ctrl_col1, ctrl_col2 = st.columns([1, 3])
 with ctrl_col1: lock_signals = st.checkbox("🔒 Lock Watchlist", value=False)
@@ -471,7 +476,7 @@ elif run_scan:
             df_temp["Rank"] = df_temp.index + 1
             st.session_state.locked_results = df_temp
 
-# --- 7. DISPLAY DASHBOARD & VISUAL CHART ---
+# --- 8. DISPLAY DASHBOARD & VISUAL CHART ---
 if "locked_results" in st.session_state and st.session_state.locked_results is not None:
     results_df = st.session_state.locked_results
     st.subheader("🎯 TOP ACTIONABLE TRADES")
