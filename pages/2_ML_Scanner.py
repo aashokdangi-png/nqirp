@@ -412,16 +412,20 @@ elif run_scan:
 
                 recent_swing_high, recent_swing_low = float(high_5m.tail(50).max()), float(low_5m.tail(50).min())
 
-                if day_trend == "Uptrend":
-                    if best_zone and best_zone['state_val'] >= 1:
-                        sl_price = best_zone['bottom'] - (0.1 * atr_14_val)
+                # ALL current SMC zones (Bullish OB/FVG, Sweep Low) are LONG setups.
+                # Target must always be > Entry, SL must always be < Entry.
+                if best_zone and best_zone['state_val'] >= 1:
+                    sl_price = best_zone['bottom'] - (0.1 * atr_14_val)
+                    
+                    if day_trend == "Uptrend":
+                        # Trend alignment: Aggressive Target (Aim for Swing High)
                         tgt_price = recent_swing_high if recent_swing_high > last_price else last_price + (1.5 * atr_14_val)
                     else:
-                        sl_price = recent_swing_low - (0.25 * atr_14_val)
-                        tgt_price = last_price + (0.5 * atr_14_val)
+                        # Counter-trend trade: Conservative Target
+                        tgt_price = last_price + (1.0 * atr_14_val) 
                 else:
-                    sl_price = recent_swing_high + (0.25 * atr_14_val)
-                    tgt_price = last_price - (0.5 * atr_14_val)
+                    sl_price = recent_swing_low - (0.25 * atr_14_val)
+                    tgt_price = last_price + (1.0 * atr_14_val)
 
                 dyn_tgt_pct, dyn_sl_pct = abs((tgt_price - last_price) / last_price) * 100, abs((last_price - sl_price) / last_price) * 100
                 meta = STOCK_METADATA.get(ticker, {"index": "Unknown", "sector": "General"})
