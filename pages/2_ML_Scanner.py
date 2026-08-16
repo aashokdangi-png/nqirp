@@ -6,7 +6,6 @@ import pandas as pd
 import numpy as np
 import yfinance as yf
 import plotly.graph_objects as go
-from datetime import timedelta
 
 st.set_page_config(page_title="NQIRP ML Scanner v4.0", page_icon="🤖", layout="wide")
 
@@ -26,15 +25,9 @@ if model is None:
     st.warning("Model file 'colab_ai_model.pkl' not found. AI probabilities will run in fallback simulation mode.")
 
 EXACT_FEATURES = [
-    'RVOL', 
-    'ATR_Pct', 
-    'RSI', 
-    'Liquidity_Sweep_High', 
-    'Liquidity_Sweep_Low', 
-    'Bullish_FVG', 
-    'Bullish_OB', 
-    'Pattern_Flag_Breakout', 
-    'Market_Sentiment'
+    'RVOL', 'ATR_Pct', 'RSI', 'Liquidity_Sweep_High', 
+    'Liquidity_Sweep_Low', 'Bullish_FVG', 'Bullish_OB', 
+    'Pattern_Flag_Breakout', 'Market_Sentiment'
 ]
 
 expected_features = list(model.feature_names_in_) if hasattr(model, "feature_names_in_") else EXACT_FEATURES
@@ -213,7 +206,7 @@ def track_smc_zones(df_5m, lookback=50):
             if not (df_5m['Close'].iloc[i+1:-1] < ob_bottom).any():
                 max_fwd = df_5m['High'].iloc[i+1:].max()
                 dist_pct = ((last_price - ob_top) / ob_top) * 100
-                if max_fwd > ob_top + (1.5 * atr): state, state_val = "🔴 MITIGATED (IMPACT OVER)", -1
+                if max_fwd > ob_top + (1.5 * atr): state, state_val = "🔴 MITIGATED", -1
                 elif ob_bottom <= last_price <= ob_top or ob_bottom <= last_low <= ob_top: state, state_val = "🟢 ENTRY READY", 2
                 elif 0 < dist_pct <= 0.4: state, state_val = "🟡 PULLBACK NEAR", 1
                 else: state, state_val = "⏸️ ZONE CREATED", 0
@@ -225,7 +218,7 @@ def track_smc_zones(df_5m, lookback=50):
             if not (df_5m['Close'].iloc[i+1:-1] > ob_top).any():
                 min_fwd = df_5m['Low'].iloc[i+1:].min()
                 dist_pct = ((ob_bottom - last_price) / ob_bottom) * 100
-                if min_fwd < ob_bottom - (1.5 * atr): state, state_val = "🔴 MITIGATED (IMPACT OVER)", -1
+                if min_fwd < ob_bottom - (1.5 * atr): state, state_val = "🔴 MITIGATED", -1
                 elif ob_bottom <= last_price <= ob_top or ob_bottom <= last_high <= ob_top: state, state_val = "🔴 SHORT READY", 2
                 elif 0 < dist_pct <= 0.4: state, state_val = "🟡 PULLBACK NEAR", 1
                 else: state, state_val = "⏸️ ZONE CREATED", 0
@@ -261,12 +254,27 @@ def calculate_composite_score(row):
     smc_str = str(row.get("SMC Structure", "")).upper()
     smc_score = 20.0 if "READY" in smc_str else (10.0 if "PULLBACK" in smc_str else 0.0)
     
-    rr = float(row.get("Tgt_Pct_Num", 1.0)) / float(row.get("SL_Pct_Num", 0.5)) if float(row.get("SL_Pct_Num", 0.5)) > 0 else 1.0
-    score_rr = min((rr / 3.0) * 15.0, 15.0)
+    sl_pct = float(row.get("SL_Pct_Num", 0.5))
+    tgt_pct = float(row.get("Tgt_Pct_Num", 1.0))
+    rr = tgt_pct / sl_pct if sl_pct > 0 else 1.0
+    
+    # Penalty for bad RR (< 1.5)
+    if rr < 1.5:
+        score_rr = 0.0
+    else:
+        score_rr = min((rr / 3.0) * 15.0, 15.0)
 
+    # Discretionary Flow Alignment Rule: Penalize counter-flow setups
+    stock_flow = float(row.get("Stock_Flow_Num", 0))
+    is_long = "Bullish" in smc_str or "LOW" in smc_str or row.get("Day Trend") == "Uptrend"
+    
     score_align = 0.0
-    if row.get("Day Trend") == "Uptrend" and float(row.get("Stock_Flow_Num", 0)) > 0: score_align += 10.0
-    if row.get("Day Trend") == "Downtrend" and float(row.get("Stock_Flow_Num", 0)) < 0: score_align += 10.0
+    if is_long and stock_flow > 0:
+        score_align += 15.0  # Inflow confirms Long
+    elif not is_long and stock_flow < 0:
+        score_align += 15.0  # Outflow confirms Short
+    else:
+        score_align -= 10.0  # Heavy penalty for counter-flow trades (e.g. Long with Cash Outflow)
 
     return max(0.0, round(score_ai + smc_score + score_rr + score_align, 2))
 
@@ -308,7 +316,7 @@ elif run_scan:
                 rsi_val = float(compute_rsi(close_5m).iloc[-1])
 
                 # CANDLESTICK TRIGGERS
-                trigger, candle_ctx = "", ""
+                trigger = ""
                 for _, row in df_5m.tail(3).iterrows():
                     body = abs(row['Open'] - row['Close'])
                     wick_up, wick_down = row['High'] - max(row['Open'], row['Close']), min(row['Open'], row['Close']) - row['Low']
@@ -344,51 +352,50 @@ elif run_scan:
                 # -------------------------------------------------------------
                 # DYNAMIC SMC TARGET & SL LOGIC (Liquidity & Invalidation Based)
                 # -------------------------------------------------------------
-                # Identify major structural liquidity pools (~2 days of data)
-                major_bsl = float(high_5m.tail(150).max()) # Buy-Side Liquidity (Major Swing High)
-                major_ssl = float(low_5m.tail(150).min())  # Sell-Side Liquidity (Major Swing Low)
-                
-                # Identify local liquidity (minor swings causing the pullback)
-                local_bsl = float(high_5m.tail(40).max())
-                local_ssl = float(low_5m.tail(40).min())
+                # Major Structural Liquidity Pools (~3 days lookback)
+                major_bsl = float(high_5m.tail(200).max())  # Buy-Side Liquidity
+                major_ssl = float(low_5m.tail(200).min())  # Sell-Side Liquidity
 
                 if best_zone and best_zone['state_val'] >= 1:
                     is_long = "Bullish" in best_zone['type'] or "Low" in best_zone['type']
                     
                     if is_long:
-                        # Invalidation Point: Just beneath the bullish block/sweep
                         sl_price = best_zone['bottom'] - (0.1 * atr_14_val)
-                        
-                        # Target: Aim for local liquidity first. If we are already at it, aim for major liquidity.
-                        if local_bsl > last_price + atr_14_val:
-                            tgt_price = local_bsl
-                        else:
-                            tgt_price = major_bsl
-                            
-                    else: # Short trade (e.g., your SBIN setup)
-                        # Invalidation Point: Just above the bearish block/sweep
+                        tgt_price = major_bsl if major_bsl > last_price + (1.5 * atr_14_val) else last_price + (3.0 * atr_14_val)
+                    else: # Short trade
                         sl_price = best_zone['top'] + (0.1 * atr_14_val)
-                        
-                        # Target: Aim for local sell-side liquidity. If too close, target the major origin of the move.
-                        if local_ssl < last_price - atr_14_val:
-                            tgt_price = local_ssl
-                        else:
-                            tgt_price = major_ssl
+                        tgt_price = major_ssl if major_ssl < last_price - (1.5 * atr_14_val) else last_price - (3.0 * atr_14_val)
                 else:
-                    # Fallback if no clean zone is found
-                    sl_price = local_ssl if day_trend == "Uptrend" else local_bsl
+                    sl_price = last_price - (1.5 * atr_14_val) if day_trend == "Uptrend" else last_price + (1.5 * atr_14_val)
                     tgt_price = major_bsl if day_trend == "Uptrend" else major_ssl
 
-                dyn_tgt_pct, dyn_sl_pct = abs((tgt_price - last_price) / last_price) * 100, abs((last_price - sl_price) / last_price) * 100
+                dyn_tgt_pct = abs((tgt_price - last_price) / last_price) * 100
+                dyn_sl_pct = abs((last_price - sl_price) / last_price) * 100
+                
+                # Flag poor R:R setups directly in the UI string
+                rr_val = dyn_tgt_pct / (dyn_sl_pct + 1e-5)
+                if rr_val < 1.5:
+                    smc_ui_str += " ⚠️ LOW R:R"
+
                 meta = STOCK_METADATA.get(ticker, {"index": "Unknown", "sector": "General"})
                 
                 item = {
-                    "Stock": ticker, "Sector": meta["sector"], "Last Price": f"₹{last_price:.2f}",
-                    "Stock Flow": flow_ui, "Stock_Flow_Num": stock_flow_cr,
-                    "Day Trend": day_trend, "Signal State": smc_ui_str, "Context & Triggers": zone_context,
-                    "Target": f"₹{tgt_price:.2f} ({dyn_tgt_pct:.1f}%)", "Stoploss": f"₹{sl_price:.2f} ({dyn_sl_pct:.1f}%)",
-                    "AI Prob": f"{prob*100:.1f}%", "Raw_AI_Prob": prob*100, "SMC Structure": smc_ui_str,
-                    "Tgt_Pct_Num": dyn_tgt_pct, "SL_Pct_Num": dyn_sl_pct
+                    "Stock": ticker, 
+                    "Index": meta["index"],  # RESTORED MISSING INDEX COLUMN
+                    "Sector": meta["sector"], 
+                    "Last Price": f"₹{last_price:.2f}",
+                    "Stock Flow": flow_ui, 
+                    "Stock_Flow_Num": stock_flow_cr,
+                    "Day Trend": day_trend, 
+                    "Signal State": smc_ui_str, 
+                    "Context & Triggers": zone_context,
+                    "Target": f"₹{tgt_price:.2f} ({dyn_tgt_pct:.1f}%)", 
+                    "Stoploss": f"₹{sl_price:.2f} ({dyn_sl_pct:.1f}%)",
+                    "AI Prob": f"{prob*100:.1f}%", 
+                    "Raw_AI_Prob": prob*100, 
+                    "SMC Structure": smc_ui_str,
+                    "Tgt_Pct_Num": dyn_tgt_pct, 
+                    "SL_Pct_Num": dyn_sl_pct
                 }
                 item["Rank Score"] = calculate_composite_score(item)
                 results.append(item)
@@ -409,7 +416,7 @@ if "locked_results" in st.session_state and st.session_state.locked_results is n
         if idx < len(results_df.head(3)):
             row = results_df.iloc[idx]
             with col:
-                st.metric(label=f"#{row['Rank']} {row['Stock']} ({row['Sector']})", value=row["Last Price"], delta=f"Score: {row['Rank Score']} | {row['Stock Flow']}")
+                st.metric(label=f"#{row['Rank']} {row['Stock']} ({row['Index']} | {row['Sector']})", value=row["Last Price"], delta=f"Score: {row['Rank Score']} | {row['Stock Flow']}")
                 st.write(f"**State:** `{row['Signal State']}`")
                 st.write(f"**Context:** {row['Context & Triggers']}")
                 st.write(f"**Target:** {row['Target']} | **SL:** {row['Stoploss']}")
@@ -447,5 +454,17 @@ if "locked_results" in st.session_state and st.session_state.locked_results is n
 
     st.markdown("---")
     st.subheader("📊 FULL WATCHLIST & LIFECYCLE STATUS")
-    display_cols = ["Rank", "Stock", "Sector", "Stock Flow", "Rank Score", "Last Price", "Day Trend", "Signal State", "Context & Triggers", "Target", "Stoploss", "AI Prob"]
-    st.dataframe(results_df[display_cols], use_container_width=True)
+    
+    # RESTORED MISSING INDEX COLUMN IN DISPLAY LIST
+    display_cols = [
+        "Rank", "Stock", "Index", "Sector", "Stock Flow", "Rank Score", 
+        "Last Price", "Day Trend", "Signal State", "Context & Triggers", 
+        "Target", "Stoploss", "AI Prob"
+    ]
+    
+    # Fixed Table Display with custom height so all rows are easily visible
+    st.dataframe(results_df[display_cols], height=500, use_container_width=True)
+    
+    # CSV Download Option for Offline Inspection
+    csv = results_df[display_cols].to_csv(index=False).encode('utf-8')
+    st.download_button("📥 Download Full Scan Results (CSV)", data=csv, file_name="smc_scan_results.csv", mime="text/csv")
