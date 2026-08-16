@@ -341,7 +341,7 @@ elif run_scan:
                 
                 prob = float(model.predict_proba(scaler.transform(X_df) if scaler else X_df)[0][1]) if hasattr(model, "predict_proba") else 0.5
                 
-               # -------------------------------------------------------------
+                # -------------------------------------------------------------
                 # DYNAMIC SMC TARGET & SL LOGIC (Liquidity & Invalidation Based)
                 # -------------------------------------------------------------
                 # Identify major structural liquidity pools (~2 days of data)
@@ -378,6 +378,26 @@ elif run_scan:
                     # Fallback if no clean zone is found
                     sl_price = local_ssl if day_trend == "Uptrend" else local_bsl
                     tgt_price = major_bsl if day_trend == "Uptrend" else major_ssl
+
+                dyn_tgt_pct, dyn_sl_pct = abs((tgt_price - last_price) / last_price) * 100, abs((last_price - sl_price) / last_price) * 100
+                meta = STOCK_METADATA.get(ticker, {"index": "Unknown", "sector": "General"})
+                
+                item = {
+                    "Stock": ticker, "Sector": meta["sector"], "Last Price": f"₹{last_price:.2f}",
+                    "Stock Flow": flow_ui, "Stock_Flow_Num": stock_flow_cr,
+                    "Day Trend": day_trend, "Signal State": smc_ui_str, "Context & Triggers": zone_context,
+                    "Target": f"₹{tgt_price:.2f} ({dyn_tgt_pct:.1f}%)", "Stoploss": f"₹{sl_price:.2f} ({dyn_sl_pct:.1f}%)",
+                    "AI Prob": f"{prob*100:.1f}%", "Raw_AI_Prob": prob*100, "SMC Structure": smc_ui_str,
+                    "Tgt_Pct_Num": dyn_tgt_pct, "SL_Pct_Num": dyn_sl_pct
+                }
+                item["Rank Score"] = calculate_composite_score(item)
+                results.append(item)
+            except Exception: continue
+
+        if results:
+            df_temp = pd.DataFrame(results).sort_values(by="Rank Score", ascending=False).reset_index(drop=True)
+            df_temp["Rank"] = df_temp.index + 1
+            st.session_state.locked_results = df_temp
 
 # --- 6. DISPLAY DASHBOARD & VISUAL CHART ---
 if "locked_results" in st.session_state and st.session_state.locked_results is not None:
