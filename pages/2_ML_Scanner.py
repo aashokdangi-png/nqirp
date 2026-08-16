@@ -285,7 +285,6 @@ def evaluate_official_filings(ticker, df_5m):
         pub_date_elem = item.find('pubDate')
         pub_date_str = pub_date_elem.text if pub_date_elem is not None else ""
 
-        # Flexible Validation: Ensure the article matches either ticker or company name keywords
         title_lower = title_text.lower()
         clean_ticker = ticker.lower()
         meta_info = STOCK_METADATA.get(ticker, {})
@@ -302,7 +301,6 @@ def evaluate_official_filings(ticker, df_5m):
 
         age_hours = (time.time() - pub_time) / 3600.0
 
-        # Semantic Classification under SEBI LODR Regulations
         tier_1_bullish = ["financial results", "net profit up", "order win", "secures contract", "bonus issue", "buyback", "board meeting outcome", "dividend declared", "acquisition", "results", "profit"]
         tier_1_bearish = ["sebi penalty", "investigation", "default", "fraud", "resignation", "net profit down", "cbi raid", "adverse ruling"]
 
@@ -336,7 +334,6 @@ def evaluate_official_filings(ticker, df_5m):
         else:
             return 0.0, f"Archived Filing: {title_text[:30]}..."
 
-        # Pre-Market Gap Risk & Gap Trap Validator
         if len(df_5m) > 20 and age_hours > 0.5:
             recent_return = ((df_5m['Close'].iloc[-1] - df_5m['Open'].iloc[-20]) / df_5m['Open'].iloc[-20]) * 100
             if sentiment == 1 and recent_return > 3.0:
@@ -527,8 +524,8 @@ elif run_scan:
                 }
                 item["Rank Score"] = calculate_composite_score(item, filing_score)
                 
-                # Tag with 🏛️ if there is any verified active filing/disclosure catalyst
-                if filing_score != 0:
+                # Tag with 🏛️ for any verified active filing/disclosure catalyst or routine filing
+                if not filing_context.startswith("No direct filing match") and not filing_context.startswith("Archived Filing"):
                     item["Stock"] = "🏛️ " + item["Stock"]
 
                 results.append(item)
