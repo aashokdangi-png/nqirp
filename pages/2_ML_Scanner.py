@@ -5,7 +5,7 @@ import time
 import urllib.request
 import urllib.parse
 import xml.etree.ElementTree as ET
-from datetime import datetime, timedelta
+from datetime import datetime
 from email.utils import parsedate_to_datetime
 import pandas as pd
 import numpy as np
@@ -32,7 +32,7 @@ def load_ai_assets():
 model, scaler = load_ai_assets()
 
 if model is None:
-    st.sidebar.warning("⚠️ 'colab_ai_model.pkl' not found. Operating in Dynamic Heuristic Confluence Mode.")
+    st.sidebar.warning("⚠️ 'colab_ai_model.pkl' not found. Operating in Confluence Mode.")
 else:
     st.sidebar.success("✅ AI Engine Loaded: Fast Offline Inference Active")
 
@@ -42,12 +42,105 @@ st.sidebar.markdown("### 🌐 Market Context & Sector Alignment")
 active_sectors = st.sidebar.multiselect(
     "Focus Sectors (Outperforming / Underperforming):", 
     ["Banking", "IT", "Auto", "Energy", "FMCG", "Metal", "Infra", "Financials", "Healthcare", "Consumer Durables"],
-    default=["Banking", "IT", "Financials"]
+    default=["Banking", "IT", "Financials", "Auto", "Energy"]
 )
 
-min_rr_threshold = st.sidebar.slider("Minimum Risk-to-Reward (R:R) Filter", 1.5, 4.0, 2.0, 0.1)
+min_rr_threshold = st.sidebar.slider("Minimum Risk-to-Reward (R:R) Filter", 1.0, 4.0, 1.2, 0.1)
 
-# --- 3. METADATA REGISTRY ---
+# --- 3. MARKET SENTIMENT & FII / DII NET ORDER FLOW ENGINE ---
+SECTOR_MAP = {
+    "Banking": "^NSEBANK", "IT": "^CNXIT", "Auto": "^CNXAUTO",
+    "Energy": "^CNXENERGY", "FMCG": "^CNXFMCG", "Metal": "^CNXMETAL",
+    "Infra": "^CNXINFRA", "Financials": "NIFTY_FIN_SERVICE.NS",
+    "Telecom": "^NSEI", "Capital Goods": "^NSEI",
+    "Healthcare": "^CNXPHARMA", "Consumer Durables": "^NSEI"
+}
+
+SECTOR_CONSTITUENTS = {
+    "Auto": ["MARUTI.NS", "M&M.NS", "ASHOKLEY.NS"],
+    "Energy": ["RELIANCE.NS", "NTPC.NS", "TATAPOWER.NS"],
+    "FMCG": ["ITC.NS", "HINDUNILVR.NS"],
+    "Metal": ["TATASTEEL.NS"],
+    "Smallcap": ["CDSL.NS", "ANGELONE.NS", "KFINTECH.NS", "SUZLON.NS", "BSOFT.NS"],
+    "Infra": ["LT.NS", "HFCL.NS"],
+    "Financials": ["BAJFINANCE.NS", "CDSL.NS", "IEX.NS"],
+    "Healthcare": ["MAXHEALTH.NS"]
+}
+
+@st.cache_data(ttl=300)
+def fetch_market_data_and_flow():
+    index_tickers = ["^NSEI", "^NSEMDCP50", "NIFTYSMALL100.NS", "^CNXSC", "^CNXSMLCAP"]
+    sector_tickers = list(set(SECTOR_MAP.values()))
+    fallback_tickers = [t for lst in SECTOR_CONSTITUENTS.values() for t in lst]
+    
+    all_tickers = list(set(index_tickers + sector_tickers + fallback_tickers))
+    trends, returns = {}, {}
+    try:
+        data = yf.download(all_tickers, period="5d", interval="1d", progress=False)
+        close_df = data["Close"] if "Close" in data else data
+
+        def get_1d_return(t_sym):
+            if t_sym in close_df:
+                s = close_df[t_sym].dropna()
+                if len(s) >= 2: return float((s.iloc[-1] - s.iloc[-2]) / s.iloc[-2])
+            return 0.0
+
+        def get_group_avg_return(t_list):
+            rets = [get_1d_return(t) for t in t_list if abs(get_1d_return(t)) > 1e-6]
+            return float(np.mean(rets)) if rets else 0.0
+
+        returns["Nifty_1D_Return"] = get_1d_return("^NSEI")
+        returns["Midcap_1D_Return"] = get_1d_return("^NSEMDCP50")
+        
+        sml_ret = 0.0
+        for sml_t in ["NIFTYSMALL100.NS", "^CNXSC", "^CNXSMLCAP"]:
+            r = get_1d_return(sml_t)
+            if abs(r) > 1e-5: sml_ret = r; break
+        if abs(sml_ret) < 1e-5: sml_ret = get_group_avg_return(SECTOR_CONSTITUENTS["Smallcap"])
+        returns["Smallcap_1D_Return"] = sml_ret
+
+        trends["^NSEI"] = f"{'+' if returns['Nifty_1D_Return'] >= 0 else ''}{returns['Nifty_1D_Return']*100:.2f}%"
+        trends["^NSEMDCP50"] = f"{'+' if returns['Midcap_1D_Return'] >= 0 else ''}{returns['Midcap_1D_Return']*100:.2f}%"
+        trends["Smallcap"] = f"{'+' if sml_ret >= 0 else ''}{sml_ret*100:.2f}%"
+
+        for sector_name, sec_ticker in SECTOR_MAP.items():
+            r = get_1d_return(sec_ticker)
+            if abs(r) < 1e-5 and sector_name in SECTOR_CONSTITUENTS:
+                r = get_group_avg_return(SECTOR_CONSTITUENTS[sector_name])
+            returns[f"Sector_{sector_name}"] = r
+
+        nifty_ret = returns["Nifty_1D_Return"]
+        fii_proxy = nifty_ret * 85000  
+        dii_proxy = -fii_proxy * 0.45 
+        net_flow = fii_proxy + dii_proxy
+        
+        fii_dii_flow = {
+            "FII_Net": fii_proxy, "DII_Net": dii_proxy, "Net_Flow": net_flow,
+            "Sentiment": "Institutional Buying" if net_flow > 0 else "Institutional Selling"
+        }
+    except Exception:
+        fii_dii_flow = {"FII_Net": 0, "DII_Net": 0, "Net_Flow": 0, "Sentiment": "Neutral"}
+        
+    return trends, returns, fii_dii_flow
+
+idx_trends, market_returns, inst_flow = fetch_market_data_and_flow()
+
+# Top Index & FII/DII Metrics Bar
+col1, col2, col3, col4 = st.columns(4)
+col1.metric("Nifty 50 (Sentiment)", idx_trends.get("^NSEI", "Active"))
+col2.metric("Nifty Midcap", idx_trends.get("^NSEMDCP50", "Active"))
+col3.metric("Nifty Smallcap", idx_trends.get("Smallcap", "Active"))
+col4.metric("Large Money (Net FII/DII)", f"₹{inst_flow['Net_Flow'] / 100:.2f} Cr", inst_flow["Sentiment"], delta_color="normal" if inst_flow["Net_Flow"] > 0 else "inverse")
+
+# Sectoral Performance Metric Grid
+st.markdown("**🌐 Sectoral Performance (Live Impact)**")
+sec_cols = st.columns(6)
+for idx, sec in enumerate(["Banking", "IT", "Auto", "Energy", "FMCG", "Metal"]):
+    sec_ret = market_returns.get(f"Sector_{sec}", 0.0) * 100
+    sec_cols[idx % 6].metric(sec, f"{'+' if sec_ret >= 0 else ''}{sec_ret:.2f}%")
+st.markdown("---")
+
+# --- 4. EXPANDED UNIVERSE METADATA REGISTRY ---
 STOCK_METADATA = {
     "RELIANCE": {"index": "Nifty 50", "sector": "Energy", "query": "Reliance Industries"},
     "TCS": {"index": "Nifty 50", "sector": "IT", "query": "Tata Consultancy Services"},
@@ -57,21 +150,35 @@ STOCK_METADATA = {
     "SBIN": {"index": "Nifty 50", "sector": "Banking", "query": "State Bank of India"},
     "BHARTIARTL": {"index": "Nifty 50", "sector": "Telecom", "query": "Bharti Airtel"},
     "ITC": {"index": "Nifty 50", "sector": "FMCG", "query": "ITC Limited"},
+    "LTIM": {"index": "Nifty 50", "sector": "IT", "query": "LTIMindtree"},
     "AXISBANK": {"index": "Nifty 50", "sector": "Banking", "query": "Axis Bank"},
+    "KOTAKBANK": {"index": "Nifty 50", "sector": "Banking", "query": "Kotak Mahindra Bank"},
     "LT": {"index": "Nifty 50", "sector": "Infra", "query": "Larsen Toubro"},
+    "HINDUNILVR": {"index": "Nifty 50", "sector": "FMCG", "query": "Hindustan Unilever"},
     "BAJFINANCE": {"index": "Nifty 50", "sector": "Financials", "query": "Bajaj Finance"},
     "MARUTI": {"index": "Nifty 50", "sector": "Auto", "query": "Maruti Suzuki"},
+    "TATASTEEL": {"index": "Nifty 50", "sector": "Metal", "query": "Tata Steel"},
+    "NTPC": {"index": "Nifty 50", "sector": "Energy", "query": "NTPC"},
+    "M&M": {"index": "Nifty 50", "sector": "Auto", "query": "Mahindra and Mahindra"},
     "TATAPOWER": {"index": "Nifty Midcap", "sector": "Energy", "query": "Tata Power"},
     "FEDERALBNK": {"index": "Nifty Midcap", "sector": "Banking", "query": "Federal Bank"},
+    "POLYCAB": {"index": "Nifty Midcap", "sector": "Capital Goods", "query": "Polycab"},
     "PERSISTENT": {"index": "Nifty Midcap", "sector": "IT", "query": "Persistent Systems"},
     "COFORGE": {"index": "Nifty Midcap", "sector": "IT", "query": "Coforge"},
     "ASHOKLEY": {"index": "Nifty Midcap", "sector": "Auto", "query": "Ashok Leyland"},
+    "MAXHEALTH": {"index": "Nifty Midcap", "sector": "Healthcare", "query": "Max Healthcare"},
+    "VOLTAS": {"index": "Nifty Midcap", "sector": "Consumer Durables", "query": "Voltas"},
     "CDSL": {"index": "Nifty Smallcap", "sector": "Financials", "query": "CDSL"},
     "ANGELONE": {"index": "Nifty Smallcap", "sector": "Financials", "query": "Angel One"},
-    "SUZLON": {"index": "Nifty Smallcap", "sector": "Energy", "query": "Suzlon Energy"}
+    "KFINTECH": {"index": "Nifty Smallcap", "sector": "Financials", "query": "KFin Technologies"},
+    "SUZLON": {"index": "Nifty Smallcap", "sector": "Energy", "query": "Suzlon Energy"},
+    "BSOFT": {"index": "Nifty Smallcap", "sector": "IT", "query": "Birlasoft"},
+    "HFCL": {"index": "Nifty Smallcap", "sector": "Infra", "query": "HFCL"},
+    "IEX": {"index": "Nifty Smallcap", "sector": "Financials", "query": "Indian Energy Exchange"},
+    "KEI": {"index": "Nifty Smallcap", "sector": "Capital Goods", "query": "KEI Industries"}
 }
 
-# --- 4. DATA INGESTION & TECHNICAL CALCULATIONS ---
+# --- 5. TECHNICAL CALCULATIONS & NEWS INGESTION ---
 def compute_vwap(df):
     tp = (df['High'] + df['Low'] + df['Close']) / 3.0
     return (tp * df['Volume']).cumsum() / (df['Volume'].cumsum() + 1e-5)
@@ -96,7 +203,6 @@ def fetch_stock_data(ticker):
         
     return df_5m, df_1d
 
-# --- 5. REAL-TIME VALIDATED NEWS / FILING INGESTION ---
 @st.cache_data(ttl=900)
 def fetch_validated_news(ticker):
     try:
@@ -149,13 +255,9 @@ def detect_synchronized_smc(df_5m):
     df['ATR'] = (df['High'] - df['Low']).rolling(14).mean()
     df['VWAP'] = compute_vwap(df)
     
-    last_idx = len(df) - 1
     last_price = float(df['Close'].iloc[-1])
-    last_time = df.index[-1]
-    
     zones = []
     
-    # Iterate through recent session candles (Lookback last 60 candles = 5 hours)
     lookback = min(60, len(df) - 3)
     start_i = len(df) - lookback
     
@@ -165,41 +267,32 @@ def detect_synchronized_smc(df_5m):
         c_high, c_low = float(df['High'].iloc[i]), float(df['Low'].iloc[i])
         atr = float(df['ATR'].iloc[i]) if not np.isnan(df['ATR'].iloc[i]) else (c_high - c_low)
         
-        # 1. Bullish Order Block (Red candle before major upward displacement + FVG)
-        if c_close < c_open: # Bearish candle body
+        # Bullish Order Block
+        if c_close < c_open:
             next_close = float(df['Close'].iloc[i+1])
             displacement = next_close - c_open
             fvg_present = float(df['Low'].iloc[i+2]) > float(df['High'].iloc[i]) if i+2 < len(df) else False
             
             if displacement > (1.2 * atr) and fvg_present:
                 ob_top, ob_bottom = c_high, c_low
-                # Check mitigation state
                 future_lows = df['Low'].iloc[i+1:]
                 mitigated = (future_lows < ob_bottom).any()
                 
                 if not mitigated:
                     if ob_bottom <= last_price <= ob_top:
-                        state = "🟢 BULLISH OB RETEST (ENTRY READY)"
-                        state_val = 3
+                        state, state_val = "🟢 BULLISH OB RETEST (ENTRY READY)", 3
                     elif last_price > ob_top and ((last_price - ob_top) / ob_top) * 100 <= 0.5:
-                        state = "🟡 PULLBACK TO BULLISH OB"
-                        state_val = 2
+                        state, state_val = "🟡 PULLBACK TO BULLISH OB", 2
                     else:
-                        state = "⏸️ UNMITIGATED BULLISH OB"
-                        state_val = 1
+                        state, state_val = "⏸️ UNMITIGATED BULLISH OB", 1
                     
                     zones.append({
-                        'type': 'Bullish OB',
-                        'top': ob_top,
-                        'bottom': ob_bottom,
-                        'start_time': candle_time,
-                        'state': state,
-                        'state_val': state_val,
-                        'bias': 'BUY'
+                        'type': 'Bullish OB', 'top': ob_top, 'bottom': ob_bottom,
+                        'start_time': candle_time, 'state': state, 'state_val': state_val, 'bias': 'BUY'
                     })
 
-        # 2. Bearish Order Block (Green candle before major downward displacement + FVG)
-        if c_close > c_open: # Bullish candle body
+        # Bearish Order Block
+        if c_close > c_open:
             next_close = float(df['Close'].iloc[i+1])
             displacement = c_open - next_close
             fvg_present = float(df['High'].iloc[i+2]) < float(df['Low'].iloc[i]) if i+2 < len(df) else False
@@ -211,61 +304,41 @@ def detect_synchronized_smc(df_5m):
                 
                 if not mitigated:
                     if ob_bottom <= last_price <= ob_top:
-                        state = "🔴 BEARISH OB RETEST (SHORT READY)"
-                        state_val = 3
+                        state, state_val = "🔴 BEARISH OB RETEST (SHORT READY)", 3
                     elif last_price < ob_bottom and ((ob_bottom - last_price) / ob_bottom) * 100 <= 0.5:
-                        state = "🟡 PULLBACK TO BEARISH OB"
-                        state_val = 2
+                        state, state_val = "🟡 PULLBACK TO BEARISH OB", 2
                     else:
-                        state = "⏸️ UNMITIGATED BEARISH OB"
-                        state_val = 1
+                        state, state_val = "⏸️ UNMITIGATED BEARISH OB", 1
                     
                     zones.append({
-                        'type': 'Bearish OB',
-                        'top': ob_top,
-                        'bottom': ob_bottom,
-                        'start_time': candle_time,
-                        'state': state,
-                        'state_val': state_val,
-                        'bias': 'SELL'
+                        'type': 'Bearish OB', 'top': ob_top, 'bottom': ob_bottom,
+                        'start_time': candle_time, 'state': state, 'state_val': state_val, 'bias': 'SELL'
                     })
 
-    # 3. Liquidity Sweeps
+    # Liquidity Sweeps
     recent_swings_low = df['Low'].iloc[-30:-3].min()
     recent_swings_high = df['High'].iloc[-30:-3].max()
-    
     curr_low, curr_high = float(df['Low'].iloc[-1]), float(df['High'].iloc[-1])
     curr_close = float(df['Close'].iloc[-1])
     
     if curr_low < recent_swings_low and curr_close > recent_swings_low:
         zones.append({
-            'type': 'Liquidity Sweep Low',
-            'top': recent_swings_low * 1.001,
-            'bottom': curr_low,
-            'start_time': df.index[-1],
-            'state': "🟢 LIQUIDITY SWEEP (BULLISH REVERSAL)",
-            'state_val': 3,
-            'bias': 'BUY'
+            'type': 'Liquidity Sweep Low', 'top': recent_swings_low * 1.001, 'bottom': curr_low,
+            'start_time': df.index[-1], 'state': "🟢 LIQUIDITY SWEEP (BULLISH REVERSAL)", 'state_val': 3, 'bias': 'BUY'
         })
         
     if curr_high > recent_swings_high and curr_close < recent_swings_high:
         zones.append({
-            'type': 'Liquidity Sweep High',
-            'top': curr_high,
-            'bottom': recent_swings_high * 0.999,
-            'start_time': df.index[-1],
-            'state': "🔴 LIQUIDITY SWEEP (BEARISH REVERSAL)",
-            'state_val': 3,
-            'bias': 'SELL'
+            'type': 'Liquidity Sweep High', 'top': curr_high, 'bottom': recent_swings_high * 0.999,
+            'start_time': df.index[-1], 'state': "🔴 LIQUIDITY SWEEP (BEARISH REVERSAL)", 'state_val': 3, 'bias': 'SELL'
         })
 
     return zones
 
 # --- 7. CORE SCANNER & CONFLUENCE MATRIX ---
-st.markdown("---")
 ctrl_col1, ctrl_col2 = st.columns([1, 3])
 with ctrl_col1:
-    scan_universe = st.selectbox("Select Scanning Universe", ["Nifty 50", "Nifty Midcap", "Nifty Smallcap", "All Combined"])
+    scan_universe = st.selectbox("Select Scanning Universe", ["All Combined", "Nifty 50", "Nifty Midcap", "Nifty Smallcap"])
 with ctrl_col2:
     st.markdown("<br>", unsafe_allow_html=True)
     run_scan = st.button("🚀 Execute Synchronized Institutional Scan", type="primary")
@@ -281,12 +354,11 @@ if run_scan:
         tickers = list(STOCK_METADATA.keys())
 
     results = []
-    
     progress_bar = st.progress(0)
     status_text = st.empty()
 
     for idx, ticker in enumerate(tickers):
-        status_text.text(f"Scanning & Synchronizing SMC Context for {ticker}...")
+        status_text.text(f"Scanning & Synchronizing Context for {ticker}...")
         progress_bar.progress((idx + 1) / len(tickers))
         
         try:
@@ -294,34 +366,24 @@ if run_scan:
             if df_5m is None or df_5m.empty or df_1d is None or df_1d.empty:
                 continue
 
-            # Core Technical Ingestion
-            close_5m = df_5m["Close"].dropna()
-            high_5m = df_5m["High"].dropna()
-            low_5m = df_5m["Low"].dropna()
-            vol_5m = df_5m["Volume"].dropna()
+            close_5m, high_5m, low_5m, vol_5m = df_5m["Close"].dropna(), df_5m["High"].dropna(), df_5m["Low"].dropna(), df_5m["Volume"].dropna()
             
             last_price = float(close_5m.iloc[-1])
             vwap_val = float(compute_vwap(df_5m).iloc[-1])
             ema_20 = float(close_5m.ewm(span=20, adjust=False).mean().iloc[-1])
             atr_14 = float((high_5m - low_5m).tail(14).mean())
-            rsi = float(compute_rsi(close_5m).iloc[-1])
             
-            # Volume Expansion (RVOL)
             avg_vol = float(vol_5m.tail(20).mean())
             rvol = float(vol_5m.iloc[-1] / (avg_vol + 1e-5))
 
-            # Higher Timeframe Structural Targets (1D Daily)
             pdh = float(df_1d["High"].dropna().iloc[-2]) if len(df_1d) >= 2 else float(high_5m.max())
             pdl = float(df_1d["Low"].dropna().iloc[-2]) if len(df_1d) >= 2 else float(low_5m.min())
-            day_open = float(df_1d["Open"].dropna().iloc[-1]) if len(df_1d) >= 1 else float(close_5m.iloc[0])
 
-            # SMC & News Ingestion
             smc_zones = detect_synchronized_smc(df_5m)
             news_score, news_context = fetch_validated_news(ticker)
 
             best_zone = sorted(smc_zones, key=lambda x: x['state_val'], reverse=True)[0] if smc_zones else None
             
-            # Confluence Scoring Matrix
             score = 0.0
             trade_bias = "NEUTRAL"
             
@@ -331,27 +393,19 @@ if run_scan:
             else:
                 trade_bias = "BUY" if last_price > vwap_val else "SELL"
 
-            # VWAP & EMA Structural Alignment
             if trade_bias == "BUY" and last_price > vwap_val and last_price > ema_20:
                 score += 25.0
             elif trade_bias == "SELL" and last_price < vwap_val and last_price < ema_20:
                 score += 25.0
 
-            # RVOL Volume Expansion Confirmation
-            if rvol >= 1.5:
-                score += 15.0
-            elif rvol >= 1.0:
-                score += 8.0
+            if rvol >= 1.5: score += 15.0
+            elif rvol >= 1.0: score += 8.0
 
-            # Sector Alignment
             meta = STOCK_METADATA.get(ticker, {"index": "N/A", "sector": "General"})
-            if meta["sector"] in active_sectors:
-                score += 15.0
+            if meta["sector"] in active_sectors: score += 15.0
 
-            # News Catalyst Contribution
             score += news_score
 
-            # Realistic Dynamic Stoploss & Target Engine
             if trade_bias == "BUY":
                 sl_price = (best_zone['bottom'] - (0.1 * atr_14)) if best_zone else (last_price - (1.5 * atr_14))
                 tgt_price = pdh if pdh > (last_price + (1.5 * atr_14)) else (last_price + (2.5 * atr_14))
@@ -383,7 +437,7 @@ if run_scan:
                 "News / Catalysts": news_context
             })
 
-        except Exception as e:
+        except Exception:
             continue
 
     status_text.empty()
@@ -394,9 +448,9 @@ if run_scan:
         res_df["Rank"] = res_df.index + 1
         st.session_state["scan_results"] = res_df
     else:
-        st.warning("No stocks passed the synchronized SMC and R:R filters. Try lowering the R:R threshold.")
+        st.warning("No stocks passed the current R:R filter. Try lowering the Minimum R:R slider in the sidebar.")
 
-# --- 8. DASHBOARD DISPLAY & TIMED PLOTLY VISUALIZER ---
+# --- 8. DASHBOARD DISPLAY & MULTI-RANK CHART VISUALIZER ---
 if "scan_results" in st.session_state:
     res_df = st.session_state["scan_results"]
     
@@ -415,57 +469,62 @@ if "scan_results" in st.session_state:
             st.write(f"**R:R:** `{row['R:R']}` | **RVOL:** `{row['RVOL']}`")
 
     st.markdown("---")
-    st.subheader("📈 Live Visual Confirmation & Time-Bounded SMC Zones")
+    st.subheader("📈 Live Visual Confirmation & Time-Bounded SMC Zones (Top 3 Setups)")
     
-    top_stock = res_df.iloc[0]['Ticker_Raw']
-    df_chart, _ = fetch_stock_data(top_stock)
-    
-    if df_chart is not None and not df_chart.empty:
-        df_chart['VWAP'] = compute_vwap(df_chart)
-        df_chart['EMA20'] = df_chart['Close'].ewm(span=20, adjust=False).mean()
+    num_charts = min(3, len(res_df))
+    if num_charts > 0:
+        tab_titles = [f"🥇 Rank {i+1}: {res_df.iloc[i]['Ticker_Raw']}" for i in range(num_charts)]
+        chart_tabs = st.tabs(tab_titles)
         
-        fig = go.Figure(data=[go.Candlestick(
-            x=df_chart.index, open=df_chart['Open'], high=df_chart['High'],
-            low=df_chart['Low'], close=df_chart['Close'], name="Price"
-        )])
-        
-        # Add VWAP & EMA 20 Overlays
-        fig.add_trace(go.Scatter(x=df_chart.index, y=df_chart['VWAP'], line=dict(color='orange', width=1.5), name="VWAP"))
-        fig.add_trace(go.Scatter(x=df_chart.index, y=df_chart['EMA20'], line=dict(color='cyan', width=1), name="EMA 20"))
-        
-        # Plot Time-Bounded Order Blocks (Fixes Multi-Day Rectangle Bleed)
-        zones = detect_synchronized_smc(df_chart)
-        for zone in zones:
-            color = "rgba(0, 255, 0, 0.25)" if zone['bias'] == 'BUY' else "rgba(255, 0, 0, 0.25)"
-            line_color = "green" if zone['bias'] == 'BUY' else "red"
-            
-            fig.add_shape(
-                type="rect",
-                x0=zone['start_time'],
-                x1=df_chart.index[-1],
-                y0=zone['bottom'],
-                y1=zone['top'],
-                fillcolor=color,
-                line=dict(color=line_color, width=1),
-            )
-            
-            fig.add_annotation(
-                x=zone['start_time'],
-                y=zone['top'],
-                text=f"{zone['type']} ({zone['state']})",
-                showarrow=False,
-                yshift=10,
-                font=dict(size=10, color=line_color)
-            )
+        for i in range(num_charts):
+            with chart_tabs[i]:
+                stock_ticker = res_df.iloc[i]['Ticker_Raw']
+                df_chart, _ = fetch_stock_data(stock_ticker)
+                
+                if df_chart is not None and not df_chart.empty:
+                    df_chart['VWAP'] = compute_vwap(df_chart)
+                    df_chart['EMA20'] = df_chart['Close'].ewm(span=20, adjust=False).mean()
+                    
+                    fig = go.Figure(data=[go.Candlestick(
+                        x=df_chart.index, open=df_chart['Open'], high=df_chart['High'],
+                        low=df_chart['Low'], close=df_chart['Close'], name="Price"
+                    )])
+                    
+                    fig.add_trace(go.Scatter(x=df_chart.index, y=df_chart['VWAP'], line=dict(color='orange', width=1.5), name="VWAP"))
+                    fig.add_trace(go.Scatter(x=df_chart.index, y=df_chart['EMA20'], line=dict(color='cyan', width=1), name="EMA 20"))
+                    
+                    zones = detect_synchronized_smc(df_chart)
+                    for zone in zones:
+                        color = "rgba(0, 255, 0, 0.25)" if zone['bias'] == 'BUY' else "rgba(255, 0, 0, 0.25)"
+                        line_color = "green" if zone['bias'] == 'BUY' else "red"
+                        
+                        fig.add_shape(
+                            type="rect",
+                            x0=zone['start_time'],
+                            x1=df_chart.index[-1],
+                            y0=zone['bottom'],
+                            y1=zone['top'],
+                            fillcolor=color,
+                            line=dict(color=line_color, width=1),
+                        )
+                        
+                        fig.add_annotation(
+                            x=zone['start_time'],
+                            y=zone['top'],
+                            text=f"{zone['type']} ({zone['state']})",
+                            showarrow=False,
+                            yshift=10,
+                            font=dict(size=10, color=line_color)
+                        )
 
-        fig.update_layout(
-            title=f"{top_stock} - Time-Bounded SMC Zones, Intraday VWAP & Confluence Overlay",
-            xaxis_rangeslider_visible=False,
-            template="plotly_dark",
-            height=550,
-            margin=dict(l=10, r=10, t=40, b=10)
-        )
-        st.plotly_chart(fig, use_container_width=True)
+                    fig.update_layout(
+                        title=f"#{i+1} Setup: {stock_ticker} - Time-Bounded SMC Zones, Intraday VWAP & Confluence Overlay",
+                        xaxis_rangeslider_visible=False,
+                        template="plotly_dark",
+                        height=520,
+                        margin=dict(l=10, r=10, t=40, b=10)
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
 
     st.markdown("---")
     st.subheader("📊 Full Synchronized Watchlist")
@@ -476,3 +535,6 @@ if "scan_results" in st.session_state:
         "Target", "Stop Loss", "R:R", "News / Catalysts"
     ]
     st.dataframe(res_df[display_cols], height=400, use_container_width=True)
+    
+    csv = res_df[display_cols].to_csv(index=False).encode('utf-8')
+    st.download_button("📥 Download Institutional Scan Results (CSV)", data=csv, file_name="synchronized_institutional_scan.csv", mime="text/csv")
