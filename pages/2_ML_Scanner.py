@@ -5,7 +5,7 @@ import time
 import urllib.request
 import urllib.parse
 import xml.etree.ElementTree as ET
-from datetime import datetime
+from datetime import datetime, timedelta
 from email.utils import parsedate_to_datetime
 import pandas as pd
 import numpy as np
@@ -36,7 +36,7 @@ if model is None:
 else:
     st.sidebar.success("✅ AI Engine Loaded: Fast Offline Inference Active")
 
-# --- 2. SIDEBAR MACRO & SECTOR CONTROLS ---
+# --- 2. SIDEBAR CONTROLS & MARKET CONTEXT ---
 st.sidebar.markdown("---")
 st.sidebar.markdown("### 🌐 Market Context & Sector Alignment")
 active_sectors = st.sidebar.multiselect(
@@ -47,17 +47,40 @@ active_sectors = st.sidebar.multiselect(
 
 min_rr_threshold = st.sidebar.slider("Minimum Risk-to-Reward (R:R) Filter", 1.0, 4.0, 1.2, 0.1)
 
-# --- 3. MARKET SENTIMENT & FII / DII NET ORDER FLOW ENGINE ---
+# --- 3. DATA FETCH ENGINE (UPSTOX VIA SESSION STATE WITH YFINANCE FALLBACK) ---
+def fetch_stock_data(ticker):
+    """
+    Data Fetch Pipeline from original codebase:
+    Primary Attempt -> Upstox API Client via st.session_state["upstox_client"]
+    Fallback Attempt -> Yahoo Finance (yfinance)
+    """
+    if "upstox_client" in st.session_state and st.session_state.get("upstox_client"):
+        try:
+            upstox = st.session_state["upstox_client"]
+            df_5m = upstox.get_ohlc(ticker, interval="5m")
+            df_1d = upstox.get_ohlc(ticker, interval="1d")
+            if df_5m is not None and not df_5m.empty and df_1d is not None and not df_1d.empty:
+                return df_5m, df_1d
+        except Exception:
+            pass
+    
+    yf_symbol = f"{ticker}.NS" if not ticker.endswith(".NS") else ticker
+    df_5m = yf.download(yf_symbol, period="5d", interval="5m", progress=False, auto_adjust=True)
+    df_1d = yf.download(yf_symbol, period="1mo", interval="1d", progress=False, auto_adjust=True)
+    return df_5m, df_1d
+
+# --- 4. MARKET SENTIMENT & FII / DII NET ORDER FLOW ENGINE ---
 SECTOR_MAP = {
     "Banking": "^NSEBANK", "IT": "^CNXIT", "Auto": "^CNXAUTO",
     "Energy": "^CNXENERGY", "FMCG": "^CNXFMCG", "Metal": "^CNXMETAL",
     "Infra": "^CNXINFRA", "Financials": "NIFTY_FIN_SERVICE.NS",
-    "Telecom": "^NSEI", "Capital Goods": "^NSEI",
-    "Healthcare": "^CNXPHARMA", "Consumer Durables": "^NSEI"
+    "Healthcare": "^CNXPHARMA"
 }
 
 SECTOR_CONSTITUENTS = {
-    "Auto": ["MARUTI.NS", "M&M.NS", "ASHOKLEY.NS"],
+    "Auto": ["MARUTI.NS", "M&M.NS", "TATAMOTORS.NS", "BAJAJ-AUTO.NS", "ASHOKLEY.NS"],
+    "Banking": ["HDFCBANK.NS", "ICICIBANK.NS", "SBIN.NS", "AXISBANK.NS", "KOTAKBANK.NS"],
+    "IT": ["TCS.NS", "INFY.NS", "LTIM.NS", "PERSISTENT.NS", "COFORGE.NS"],
     "Energy": ["RELIANCE.NS", "NTPC.NS", "TATAPOWER.NS"],
     "FMCG": ["ITC.NS", "HINDUNILVR.NS"],
     "Metal": ["TATASTEEL.NS"],
@@ -82,7 +105,9 @@ def fetch_market_data_and_flow():
         def get_1d_return(t_sym):
             if t_sym in close_df:
                 s = close_df[t_sym].dropna()
-                if len(s) >= 2: return float((s.iloc[-1] - s.iloc[-2]) / s.iloc[-2])
+                if len(s) >= 2: 
+                    ret = float((s.iloc[-1] - s.iloc[-2]) / s.iloc[-2])
+                    return ret if not np.isnan(ret) else 0.0
             return 0.0
 
         def get_group_avg_return(t_list):
@@ -105,18 +130,19 @@ def fetch_market_data_and_flow():
 
         for sector_name, sec_ticker in SECTOR_MAP.items():
             r = get_1d_return(sec_ticker)
-            if abs(r) < 1e-5 and sector_name in SECTOR_CONSTITUENTS:
+            if (abs(r) < 1e-5 or np.isnan(r)) and sector_name in SECTOR_CONSTITUENTS:
                 r = get_group_avg_return(SECTOR_CONSTITUENTS[sector_name])
             returns[f"Sector_{sector_name}"] = r
 
+        # Scaled FII/DII Net Flow proxy in ₹ Crores
         nifty_ret = returns["Nifty_1D_Return"]
-        fii_proxy = nifty_ret * 85000  
-        dii_proxy = -fii_proxy * 0.45 
+        fii_proxy = nifty_ret * 450000 
+        dii_proxy = -fii_proxy * 0.40  
         net_flow = fii_proxy + dii_proxy
         
         fii_dii_flow = {
             "FII_Net": fii_proxy, "DII_Net": dii_proxy, "Net_Flow": net_flow,
-            "Sentiment": "Institutional Buying" if net_flow > 0 else "Institutional Selling"
+            "Sentiment": "Institutional Buying" if net_flow >= 0 else "Institutional Selling"
         }
     except Exception:
         fii_dii_flow = {"FII_Net": 0, "DII_Net": 0, "Net_Flow": 0, "Sentiment": "Neutral"}
@@ -130,7 +156,12 @@ col1, col2, col3, col4 = st.columns(4)
 col1.metric("Nifty 50 (Sentiment)", idx_trends.get("^NSEI", "Active"))
 col2.metric("Nifty Midcap", idx_trends.get("^NSEMDCP50", "Active"))
 col3.metric("Nifty Smallcap", idx_trends.get("Smallcap", "Active"))
-col4.metric("Large Money (Net FII/DII)", f"₹{inst_flow['Net_Flow'] / 100:.2f} Cr", inst_flow["Sentiment"], delta_color="normal" if inst_flow["Net_Flow"] > 0 else "inverse")
+col4.metric(
+    "Large Money (Net FII/DII)", 
+    f"₹{inst_flow['Net_Flow']:,.0f} Cr", 
+    inst_flow["Sentiment"], 
+    delta_color="normal" if inst_flow["Net_Flow"] >= 0 else "inverse"
+)
 
 # Sectoral Performance Metric Grid
 st.markdown("**🌐 Sectoral Performance (Live Impact)**")
@@ -140,7 +171,7 @@ for idx, sec in enumerate(["Banking", "IT", "Auto", "Energy", "FMCG", "Metal"]):
     sec_cols[idx % 6].metric(sec, f"{'+' if sec_ret >= 0 else ''}{sec_ret:.2f}%")
 st.markdown("---")
 
-# --- 4. EXPANDED UNIVERSE METADATA REGISTRY ---
+# --- 5. EXPANDED UNIVERSE METADATA REGISTRY ---
 STOCK_METADATA = {
     "RELIANCE": {"index": "Nifty 50", "sector": "Energy", "query": "Reliance Industries"},
     "TCS": {"index": "Nifty 50", "sector": "IT", "query": "Tata Consultancy Services"},
@@ -157,6 +188,7 @@ STOCK_METADATA = {
     "HINDUNILVR": {"index": "Nifty 50", "sector": "FMCG", "query": "Hindustan Unilever"},
     "BAJFINANCE": {"index": "Nifty 50", "sector": "Financials", "query": "Bajaj Finance"},
     "MARUTI": {"index": "Nifty 50", "sector": "Auto", "query": "Maruti Suzuki"},
+    "TATAMOTORS": {"index": "Nifty 50", "sector": "Auto", "query": "Tata Motors"},
     "TATASTEEL": {"index": "Nifty 50", "sector": "Metal", "query": "Tata Steel"},
     "NTPC": {"index": "Nifty 50", "sector": "Energy", "query": "NTPC"},
     "M&M": {"index": "Nifty 50", "sector": "Auto", "query": "Mahindra and Mahindra"},
@@ -178,30 +210,10 @@ STOCK_METADATA = {
     "KEI": {"index": "Nifty Smallcap", "sector": "Capital Goods", "query": "KEI Industries"}
 }
 
-# --- 5. TECHNICAL CALCULATIONS & NEWS INGESTION ---
+# --- 6. TECHNICAL INDICATORS & NEWS INGESTION ---
 def compute_vwap(df):
     tp = (df['High'] + df['Low'] + df['Close']) / 3.0
     return (tp * df['Volume']).cumsum() / (df['Volume'].cumsum() + 1e-5)
-
-def compute_rsi(series, period=14):
-    delta = series.diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
-    rs = gain / (loss + 1e-5)
-    return 100 - (100 / (1 + rs))
-
-@st.cache_data(ttl=300)
-def fetch_stock_data(ticker):
-    yf_symbol = f"{ticker}.NS" if not ticker.endswith(".NS") else ticker
-    df_5m = yf.download(yf_symbol, period="5d", interval="5m", progress=False, auto_adjust=True)
-    df_1d = yf.download(yf_symbol, period="1mo", interval="1d", progress=False, auto_adjust=True)
-    
-    if isinstance(df_5m.columns, pd.MultiIndex):
-        df_5m.columns = df_5m.columns.get_level_values(0)
-    if isinstance(df_1d.columns, pd.MultiIndex):
-        df_1d.columns = df_1d.columns.get_level_values(0)
-        
-    return df_5m, df_1d
 
 @st.cache_data(ttl=900)
 def fetch_validated_news(ticker):
@@ -246,12 +258,15 @@ def fetch_validated_news(ticker):
     except Exception:
         return 0.0, "News Feed Operational"
 
-# --- 6. SYNCHRONIZED SMC DETECTOR ENGINE ---
+# --- 7. SYNCHRONIZED SMC DETECTOR ENGINE ---
 def detect_synchronized_smc(df_5m):
     if len(df_5m) < 30:
         return []
     
     df = df_5m.copy()
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = df.columns.get_level_values(0)
+
     df['ATR'] = (df['High'] - df['Low']).rolling(14).mean()
     df['VWAP'] = compute_vwap(df)
     
@@ -335,7 +350,7 @@ def detect_synchronized_smc(df_5m):
 
     return zones
 
-# --- 7. CORE SCANNER & CONFLUENCE MATRIX ---
+# --- 8. CORE SCANNER & CONFLUENCE MATRIX ---
 ctrl_col1, ctrl_col2 = st.columns([1, 3])
 with ctrl_col1:
     scan_universe = st.selectbox("Select Scanning Universe", ["All Combined", "Nifty 50", "Nifty Midcap", "Nifty Smallcap"])
@@ -366,7 +381,13 @@ if run_scan:
             if df_5m is None or df_5m.empty or df_1d is None or df_1d.empty:
                 continue
 
-            close_5m, high_5m, low_5m, vol_5m = df_5m["Close"].dropna(), df_5m["High"].dropna(), df_5m["Low"].dropna(), df_5m["Volume"].dropna()
+            if isinstance(df_5m.columns, pd.MultiIndex):
+                df_5m.columns = df_5m.columns.get_level_values(0)
+            if isinstance(df_1d.columns, pd.MultiIndex):
+                df_1d.columns = df_1d.columns.get_level_values(0)
+
+            close_5m, high_5m, low_5m = df_5m["Close"].dropna(), df_5m["High"].dropna(), df_5m["Low"].dropna()
+            vol_5m = df_5m["Volume"].dropna() if "Volume" in df_5m else pd.Series(1, index=close_5m.index)
             
             last_price = float(close_5m.iloc[-1])
             vwap_val = float(compute_vwap(df_5m).iloc[-1])
@@ -450,7 +471,7 @@ if run_scan:
     else:
         st.warning("No stocks passed the current R:R filter. Try lowering the Minimum R:R slider in the sidebar.")
 
-# --- 8. DASHBOARD DISPLAY & MULTI-RANK CHART VISUALIZER ---
+# --- 9. DASHBOARD DISPLAY & MULTI-RANK CHART VISUALIZER ---
 if "scan_results" in st.session_state:
     res_df = st.session_state["scan_results"]
     
@@ -469,11 +490,14 @@ if "scan_results" in st.session_state:
             st.write(f"**R:R:** `{row['R:R']}` | **RVOL:** `{row['RVOL']}`")
 
     st.markdown("---")
-    st.subheader("📈 Live Visual Confirmation & Time-Bounded SMC Zones (Top 3 Setups)")
+    st.subheader("📈 Live Visual SMC Charts (Rank 1, Rank 2 & Rank 3 Setups)")
     
     num_charts = min(3, len(res_df))
     if num_charts > 0:
-        tab_titles = [f"🥇 Rank {i+1}: {res_df.iloc[i]['Ticker_Raw']}" for i in range(num_charts)]
+        tab_titles = [f"🥇 Rank 1: {res_df.iloc[0]['Ticker_Raw']}"]
+        if num_charts > 1: tab_titles.append(f"🥈 Rank 2: {res_df.iloc[1]['Ticker_Raw']}")
+        if num_charts > 2: tab_titles.append(f"🥉 Rank 3: {res_df.iloc[2]['Ticker_Raw']}")
+        
         chart_tabs = st.tabs(tab_titles)
         
         for i in range(num_charts):
@@ -482,6 +506,9 @@ if "scan_results" in st.session_state:
                 df_chart, _ = fetch_stock_data(stock_ticker)
                 
                 if df_chart is not None and not df_chart.empty:
+                    if isinstance(df_chart.columns, pd.MultiIndex):
+                        df_chart.columns = df_chart.columns.get_level_values(0)
+
                     df_chart['VWAP'] = compute_vwap(df_chart)
                     df_chart['EMA20'] = df_chart['Close'].ewm(span=20, adjust=False).mean()
                     
@@ -518,7 +545,7 @@ if "scan_results" in st.session_state:
                         )
 
                     fig.update_layout(
-                        title=f"#{i+1} Setup: {stock_ticker} - Time-Bounded SMC Zones, Intraday VWAP & Confluence Overlay",
+                        title=f"Rank #{i+1} Setup: {stock_ticker} - SMC Zone Rectangles, VWAP & Confluence",
                         xaxis_rangeslider_visible=False,
                         template="plotly_dark",
                         height=520,
