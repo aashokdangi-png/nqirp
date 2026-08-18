@@ -267,7 +267,7 @@ ctrl_col1, ctrl_col2 = st.columns([1, 3])
 with ctrl_col1:
     scan_universe = st.selectbox("Select Scanning Universe", ["Nifty 50", "Nifty Midcap", "Nifty Smallcap", "All Combined"])
 with ctrl_col2:
-    st.markdown("<br>", unsafe_allow_attrs=True)
+    st.markdown("<br>", unsafe_allow_html=True)
     run_scan = st.button("🚀 Execute Synchronized Institutional Scan", type="primary")
 
 if run_scan:
