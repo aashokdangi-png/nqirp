@@ -100,28 +100,33 @@ def fetch_market_data_and_flow(has_upstox):
     trends, returns = {}, {}
     close_df = None
 
-    # Try fetching via Upstox session client first if available
+    # 1. Try fetching individual heavy equities via Upstox if available for flow calculation
+    upstox_price_dict = {}
     if has_upstox and "upstox_client" in st.session_state:
         try:
             upstox = st.session_state["upstox_client"]
-            price_dict = {}
-            for t in all_tickers:
-                clean_t = t.replace("^", "").replace(".NS", "")
+            for t in fallback_tickers:
+                clean_t = t.replace(".NS", "")
                 df_1d = upstox.get_ohlc(clean_t, interval="1d")
                 if df_1d is not None and not df_1d.empty:
-                    price_dict[t] = df_1d["Close"]
-            if price_dict:
-                close_df = pd.DataFrame(price_dict)
+                    upstox_price_dict[t] = df_1d["Close"]
         except Exception:
             pass
 
-    # Fallback to yfinance if Upstox isn't connected or failed
-    if close_df is None or close_df.empty:
-        try:
-            data = yf.download(all_tickers, period="5d", interval="1d", progress=False, auto_adjust=True)
-            close_df = data["Close"] if isinstance(data, pd.DataFrame) and "Close" in data else data
-        except Exception:
-            pass
+    # 2. Fetch indices and sectors reliably via Yahoo Finance (Standard for NSE Indices)
+    try:
+        data = yf.download(all_tickers, period="5d", interval="1d", progress=False, auto_adjust=True)
+        close_df = data["Close"] if isinstance(data, pd.DataFrame) and "Close" in data else data
+    except Exception:
+        close_df = pd.DataFrame()
+
+    # Merge Upstox equity data if successfully fetched
+    if upstox_price_dict:
+        upstox_df = pd.DataFrame(upstox_price_dict)
+        if close_df is not None and not close_df.empty:
+            close_df = close_df.combine_first(upstox_df)
+        else:
+            close_df = upstox_df
 
     try:
         def get_1d_return(t_sym):
