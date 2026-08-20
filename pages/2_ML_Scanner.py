@@ -125,8 +125,8 @@ def fetch_upstox_live(ticker: str, interval: str = "5m") -> pd.DataFrame:
             for col in ["Open", "High", "Low", "Close", "Volume"]:
                 df[col] = pd.to_numeric(df[col], errors="coerce")
             return df
-    except Exception:
-        pass
+    except Exception as e:
+        st.error(f"Upstox API Failure: {e}")
     return None
 
 def fetch_stock_data(ticker):
