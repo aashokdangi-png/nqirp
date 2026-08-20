@@ -46,29 +46,34 @@ active_sectors = st.sidebar.multiselect(
 )
 
 min_rr_threshold = st.sidebar.slider("Minimum Risk-to-Reward (R:R) Filter", 1.0, 4.0, 1.2, 0.1)
+st.sidebar.markdown("---")
+st.sidebar.markdown("### 🔌 Active Data Pipe Status")
+current_source = st.session_state.get("active_data_source", "⏳ Not Scanned Yet")
+st.sidebar.write(f"**Source:** {current_source}")
 
+if "Yahoo Finance" in current_source and "upstox_error_log" in st.session_state:
+    with st.sidebar.expander("View Upstox Error Log"):
+        st.write(st.session_state["upstox_error_log"])
 # --- 3. DATA FETCH ENGINE (UPSTOX VIA SESSION STATE WITH YFINANCE FALLBACK) ---
 def fetch_stock_data(ticker):
-    """
-    Data Fetch Pipeline from original codebase:
-    Primary Attempt -> Upstox API Client via st.session_state["upstox_client"]
-    Fallback Attempt -> Yahoo Finance (yfinance)
-    """
     if "upstox_client" in st.session_state and st.session_state.get("upstox_client"):
         try:
             upstox = st.session_state["upstox_client"]
             df_5m = upstox.get_ohlc(ticker, interval="5m")
             df_1d = upstox.get_ohlc(ticker, interval="1d")
             if df_5m is not None and not df_5m.empty and df_1d is not None and not df_1d.empty:
+                st.session_state["active_data_source"] = "🟢 Upstox API (Live)"
                 return df_5m, df_1d
-        except Exception:
+        except Exception as e:
+            st.session_state["upstox_error_log"] = str(e)
             pass
     
+    # Fallback occurred
+    st.session_state["active_data_source"] = "🟡 Yahoo Finance (Fallback)"
     yf_symbol = f"{ticker}.NS" if not ticker.endswith(".NS") else ticker
     df_5m = yf.download(yf_symbol, period="5d", interval="5m", progress=False, auto_adjust=True)
     df_1d = yf.download(yf_symbol, period="1mo", interval="1d", progress=False, auto_adjust=True)
     return df_5m, df_1d
-
 # --- 4. MARKET SENTIMENT & FII / DII NET ORDER FLOW ENGINE ---
 SECTOR_MAP = {
     "Banking": "^NSEBANK", "IT": "^CNXIT", "Auto": "^CNXAUTO",
