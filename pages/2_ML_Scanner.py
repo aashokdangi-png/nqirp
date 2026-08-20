@@ -2,6 +2,7 @@ import streamlit as st
 import joblib
 import os
 import time
+import requests
 import urllib.request
 import urllib.parse
 import xml.etree.ElementTree as ET
@@ -11,7 +12,6 @@ import pandas as pd
 import numpy as np
 import yfinance as yf
 import plotly.graph_objects as go
-import requests
 
 # --- PAGE CONFIGURATION ---
 st.set_page_config(
@@ -48,45 +48,32 @@ active_sectors = st.sidebar.multiselect(
 
 min_rr_threshold = st.sidebar.slider("Minimum Risk-to-Reward (R:R) Filter", 1.0, 4.0, 1.2, 0.1)
 
+# --- 3. DATA FETCH ENGINE (DIRECT UPSTOX V3 WITH YFINANCE FALLBACK) ---
 UPSTOX_ISIN_MAP = {
-    "RELIANCE": "NSE_EQ|INE002A01018",
-    "TCS": "NSE_EQ|INE467B01029",
-    "INFY": "NSE_EQ|INE009A01021",
-    "HDFCBANK": "NSE_EQ|INE040A01034",
-    "ICICIBANK": "NSE_EQ|INE090A01013",
-    "SBIN": "NSE_EQ|INE062A01020",
-    "BHARTIARTL": "NSE_EQ|INE397D01024",
-    "ITC": "NSE_EQ|INE154A01025",
-    "LTIM": "NSE_EQ|INE214T01019",
-    "AXISBANK": "NSE_EQ|INE238A01034",
-    "KOTAKBANK": "NSE_EQ|INE237A01028",
-    "LT": "NSE_EQ|INE018A01030",
-    "HINDUNILVR": "NSE_EQ|INE030A01027",
-    "BAJFINANCE": "NSE_EQ|INE296A01024",
-    "MARUTI": "NSE_EQ|INE585B01010",
-    "TATAMOTORS": "NSE_EQ|INE155A01022",
-    "TATASTEEL": "NSE_EQ|INE081A01020",
-    "NTPC": "NSE_EQ|INE733E01010",
-    "M&M": "NSE_EQ|INE101A01026",
-    "TATAPOWER": "NSE_EQ|INE245A01021",
-    "FEDERALBNK": "NSE_EQ|INE028D01010",
-    "POLYCAB": "NSE_EQ|INE455K01017",
-    "PERSISTENT": "NSE_EQ|INE262H01021",
-    "COFORGE": "NSE_EQ|INE591G01017",
-    "ASHOKLEY": "NSE_EQ|INE208A01029",
-    "MAXHEALTH": "NSE_EQ|INE275F01028",
-    "VOLTAS": "NSE_EQ|INE226A01021",
-    "CDSL": "NSE_EQ|INE736A01011",
-    "ANGELONE": "NSE_EQ|INE732I01013",
-    "KFINTECH": "NSE_EQ|INE138Y01011",
-    "SUZLON": "NSE_EQ|INE040H01021",
-    "BSOFT": "NSE_EQ|INE084A01015",
-    "HFCL": "NSE_EQ|INE548A01028",
-    "IEX": "NSE_EQ|INE577H01019",
-    "KEI": "NSE_EQ|INE378B01023",
+    "RELIANCE": "NSE_EQ|INE002A01018", "TCS": "NSE_EQ|INE467B01029", "INFY": "NSE_EQ|INE009A01021",
+    "HDFCBANK": "NSE_EQ|INE040A01034", "ICICIBANK": "NSE_EQ|INE090A01013", "REDINGTON": "NSE_EQ|INE891D01026",
+    "FIRSTSOURCE": "NSE_EQ|INE688F01017", "FSL": "NSE_EQ|INE688F01017", "SBIN": "NSE_EQ|INE062A01020",
+    "BHARTIARTL": "NSE_EQ|INE397D01024", "ITC": "NSE_EQ|INE154A01025", "LT": "NSE_EQ|INE018A01030",
+    "AXISBANK": "NSE_EQ|INE238A01034", "KOTAKBANK": "NSE_EQ|INE237A01028", "HINDUNILVR": "NSE_EQ|INE030A01027",
+    "BAJFINANCE": "NSE_EQ|INE296A01024", "MARUTI": "NSE_EQ|INE585B01010", "ASIANPAINT": "NSE_EQ|INE021A01026",
+    "HCLTECH": "NSE_EQ|INE860A01027", "SUNPHARMA": "NSE_EQ|INE044A01036", "TATAMOTORS": "NSE_EQ|INE155A01022",
+    "TATASTEEL": "NSE_EQ|INE081A01020", "NTPC": "NSE_EQ|INE733E01010", "POWERGRID": "NSE_EQ|INE752E01010",
+    "TITAN": "NSE_EQ|INE280A01028", "ULTRACEMCO": "NSE_EQ|INE481G01011", "WIPRO": "NSE_EQ|INE075A01022",
+    "ONGC": "NSE_EQ|INE213A01029", "ADANIENT": "NSE_EQ|INE423A01024", "ADANIPORTS": "NSE_EQ|INE742F01042",
+    "COALINDIA": "NSE_EQ|INE522F01014", "M&M": "NSE_EQ|INE101A01026", "TATAPOWER": "NSE_EQ|INE245A01021",
+    "FEDERALBNK": "NSE_EQ|INE171A01029", "POLYCAB": "NSE_EQ|INE455K01017", "PERSISTENT": "NSE_EQ|INE262H01021",
+    "COFORGE": "NSE_EQ|INE591G01017", "ASHOKLEY": "NSE_EQ|INE208A01029", "MAXHEALTH": "NSE_EQ|INE275F01028",
+    "VOLTAS": "NSE_EQ|INE226A01021", "CDSL": "NSE_EQ|INE736A01011", "ANGELONE": "NSE_EQ|INE732I01013",
+    "KFINTECH": "NSE_EQ|INE138Y01011", "SUZLON": "NSE_EQ|INE040H01021", "BSOFT": "NSE_EQ|INE084A01015",
+    "HFCL": "NSE_EQ|INE548A01028", "IEX": "NSE_EQ|INE577H01019", "KEI": "NSE_EQ|INE378B01023",
+    "LTIM": "NSE_EQ|INE214T01019"
 }
 
-def get_upstox_access_token() -> str | None:
+def get_upstox_instrument_key(symbol: str) -> str:
+    clean_sym = symbol.upper().replace(".NS", "").replace("&", "_").strip()
+    return UPSTOX_ISIN_MAP.get(clean_sym, f"NSE_EQ|{clean_sym}")
+
+def get_upstox_access_token() -> str:
     try:
         if "UPSTOX_ACCESS_TOKEN" in st.secrets:
             return st.secrets["UPSTOX_ACCESS_TOKEN"]
@@ -94,64 +81,59 @@ def get_upstox_access_token() -> str | None:
     except Exception:
         return None
 
-def fetch_upstox_live(symbol: str, interval: str = "5m") -> pd.DataFrame | None:
-    try:
-        access_token = get_upstox_access_token()
-        if not access_token:
-            return None
-
-        clean_sym = symbol.upper().replace(".NS", "").replace("&", "_").strip()
-        raw_key = UPSTOX_ISIN_MAP.get(clean_sym, f"NSE_EQ|{clean_sym}")
-        instrument_key = urllib.parse.quote(raw_key, safe="")
-        interval_str = str(interval).lower().strip()
-
-        if "day" in interval_str or "1d" in interval_str:
-            to_date = datetime.now().strftime("%Y-%m-%d")
-            from_date = (datetime.now() - timedelta(days=120)).strftime("%Y-%m-%d")
-            url = f"https://api.upstox.com/v3/historical-candle/{instrument_key}/day/1/{to_date}/{from_date}"
-        else:
-            digits = "".join(filter(str.isdigit, interval_str))
-            int_val = int(digits) if digits else 5
-            url = f"https://api.upstox.com/v3/historical-candle/intraday/{instrument_key}/minutes/{int_val}"
-
-        headers = {
-            "Accept": "application/json",
-            "Authorization": f"Bearer {access_token}",
-        }
-
-        res = requests.get(url, headers=headers, timeout=5)
-        if res.status_code == 200:
-            raw_candles = res.json().get("data", {}).get("candles", [])
-            if raw_candles:
-                df = pd.DataFrame(
-                    raw_candles,
-                    columns=["Datetime", "Open", "High", "Low", "Close", "Volume", "OI"],
-                )
-                df["Datetime"] = pd.to_datetime(df["Datetime"])
-                df = df.sort_values("Datetime").set_index("Datetime")
-                for col in ["Open", "High", "Low", "Close", "Volume"]:
-                    df[col] = pd.to_numeric(df[col], errors="coerce")
-                return df
-    except Exception:
-        pass
-    return None
-
 def fetch_stock_data(ticker):
     """
     Data Fetch Pipeline:
-    Primary Attempt -> Upstox API v3 requests using token from Streamlit Secrets
+    Primary Attempt -> Direct Upstox REST API v3
     Fallback Attempt -> Yahoo Finance (yfinance)
     """
-    df_5m = fetch_upstox_live(ticker, interval="5m")
-    df_1d = fetch_upstox_live(ticker, interval="1d")
-    
-    if df_5m is not None and not df_5m.empty and df_1d is not None and not df_1d.empty:
-        return df_5m, df_1d
-        
+    # --- UPSTOX API FETCH ---
+    try:
+        access_token = get_upstox_access_token()
+        if access_token:
+            instrument_key = urllib.parse.quote(get_upstox_instrument_key(ticker), safe="")
+            headers = {"Accept": "application/json", "Authorization": f"Bearer {access_token}"}
+            
+            # Fetch 5-minute data (Intraday API)
+            url_5m = f"https://api.upstox.com/v3/historical-candle/intraday/{instrument_key}/minutes/5"
+            res_5m = requests.get(url_5m, headers=headers, timeout=5)
+            
+            # Fetch 1-day data (Historical API)
+            to_date = datetime.now().strftime("%Y-%m-%d")
+            from_date = (datetime.now() - timedelta(days=120)).strftime("%Y-%m-%d")
+            url_1d = f"https://api.upstox.com/v3/historical-candle/{instrument_key}/days/1/{to_date}/{from_date}"
+            res_1d = requests.get(url_1d, headers=headers, timeout=5)
+
+            if res_5m.status_code == 200 and res_1d.status_code == 200:
+                raw_5m = res_5m.json().get("data", {}).get("candles", [])
+                raw_1d = res_1d.json().get("data", {}).get("candles", [])
+
+                if raw_5m and raw_1d:
+                    # Process 5m DataFrame (Index mapped to Datetime for SMC Logic)
+                    df_5m = pd.DataFrame(raw_5m, columns=["Datetime", "Open", "High", "Low", "Close", "Volume", "OI"])
+                    df_5m["Datetime"] = pd.to_datetime(df_5m["Datetime"])
+                    df_5m.set_index("Datetime", inplace=True)
+                    df_5m.sort_index(inplace=True)
+                    for col in ["Open", "High", "Low", "Close", "Volume"]:
+                        df_5m[col] = pd.to_numeric(df_5m[col], errors="coerce")
+
+                    # Process 1d DataFrame
+                    df_1d = pd.DataFrame(raw_1d, columns=["Datetime", "Open", "High", "Low", "Close", "Volume", "OI"])
+                    df_1d["Datetime"] = pd.to_datetime(df_1d["Datetime"])
+                    df_1d.set_index("Datetime", inplace=True)
+                    df_1d.sort_index(inplace=True)
+                    for col in ["Open", "High", "Low", "Close", "Volume"]:
+                        df_1d[col] = pd.to_numeric(df_1d[col], errors="coerce")
+
+                    return df_5m[df_5m["Volume"] > 0], df_1d[df_1d["Volume"] > 0]
+    except Exception:
+        pass # If anything fails, allow it to fall back to Yahoo Finance silently
+
+    # --- YAHOO FINANCE FALLBACK ---
     yf_symbol = f"{ticker}.NS" if not ticker.endswith(".NS") else ticker
-    df_5m_yf = yf.download(yf_symbol, period="5d", interval="5m", progress=False, auto_adjust=True)
-    df_1d_yf = yf.download(yf_symbol, period="1mo", interval="1d", progress=False, auto_adjust=True)
-    return df_5m_yf, df_1d_yf
+    df_5m = yf.download(yf_symbol, period="5d", interval="5m", progress=False, auto_adjust=True)
+    df_1d = yf.download(yf_symbol, period="1mo", interval="1d", progress=False, auto_adjust=True)
+    return df_5m, df_1d
 
 # --- 4. MARKET SENTIMENT & FII / DII NET ORDER FLOW ENGINE ---
 SECTOR_MAP = {
@@ -218,6 +200,7 @@ def fetch_market_data_and_flow():
                 r = get_group_avg_return(SECTOR_CONSTITUENTS[sector_name])
             returns[f"Sector_{sector_name}"] = r
 
+        # Scaled FII/DII Net Flow proxy in ₹ Crores
         nifty_ret = returns["Nifty_1D_Return"]
         fii_proxy = nifty_ret * 450000 
         dii_proxy = -fii_proxy * 0.40  
@@ -234,6 +217,7 @@ def fetch_market_data_and_flow():
 
 idx_trends, market_returns, inst_flow = fetch_market_data_and_flow()
 
+# Top Index & FII/DII Metrics Bar
 col1, col2, col3, col4 = st.columns(4)
 col1.metric("Nifty 50 (Sentiment)", idx_trends.get("^NSEI", "Active"))
 col2.metric("Nifty Midcap", idx_trends.get("^NSEMDCP50", "Active"))
@@ -245,6 +229,7 @@ col4.metric(
     delta_color="normal" if inst_flow["Net_Flow"] >= 0 else "inverse"
 )
 
+# Sectoral Performance Metric Grid
 st.markdown("**🌐 Sectoral Performance (Live Impact)**")
 sec_cols = st.columns(6)
 for idx, sec in enumerate(["Banking", "IT", "Auto", "Energy", "FMCG", "Metal"]):
@@ -363,6 +348,7 @@ def detect_synchronized_smc(df_5m):
         c_high, c_low = float(df['High'].iloc[i]), float(df['Low'].iloc[i])
         atr = float(df['ATR'].iloc[i]) if not np.isnan(df['ATR'].iloc[i]) else (c_high - c_low)
         
+        # Bullish Order Block
         if c_close < c_open:
             next_close = float(df['Close'].iloc[i+1])
             displacement = next_close - c_open
@@ -386,6 +372,7 @@ def detect_synchronized_smc(df_5m):
                         'start_time': candle_time, 'state': state, 'state_val': state_val, 'bias': 'BUY'
                     })
 
+        # Bearish Order Block
         if c_close > c_open:
             next_close = float(df['Close'].iloc[i+1])
             displacement = c_open - next_close
@@ -409,6 +396,7 @@ def detect_synchronized_smc(df_5m):
                         'start_time': candle_time, 'state': state, 'state_val': state_val, 'bias': 'SELL'
                     })
 
+    # Liquidity Sweeps
     recent_swings_low = df['Low'].iloc[-30:-3].min()
     recent_swings_high = df['High'].iloc[-30:-3].max()
     curr_low, curr_high = float(df['Low'].iloc[-1]), float(df['High'].iloc[-1])
