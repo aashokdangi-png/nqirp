@@ -41,8 +41,8 @@ st.sidebar.markdown("---")
 st.sidebar.markdown("### 🌐 Market Context & Sector Alignment")
 active_sectors = st.sidebar.multiselect(
     "Focus Sectors (Outperforming / Underperforming):", 
-    ["Banking", "IT", "Auto", "Energy", "FMCG", "Metal", "Infra", "Financials", "Healthcare", "Consumer Durables"],
-    default=["Banking", "IT", "Financials", "Auto", "Energy"]
+    ["Banking", "IT", "Auto", "Energy", "FMCG", "Metal", "Infra", "Financials", "Healthcare", "Consumer Durables", "PSU", "Railways", "Defence"],
+    default=["Banking", "IT", "Financials", "Auto", "Energy", "PSU"]
 )
 
 min_rr_threshold = st.sidebar.slider("Minimum Risk-to-Reward (R:R) Filter", 1.0, 4.0, 1.2, 0.1)
@@ -74,7 +74,7 @@ SECTOR_MAP = {
     "Banking": "^NSEBANK", "IT": "^CNXIT", "Auto": "^CNXAUTO",
     "Energy": "^CNXENERGY", "FMCG": "^CNXFMCG", "Metal": "^CNXMETAL",
     "Infra": "^CNXINFRA", "Financials": "NIFTY_FIN_SERVICE.NS",
-    "Healthcare": "^CNXPHARMA"
+    "Healthcare": "^CNXPHARMA", "PSU": "^CNXPSUBANK"
 }
 
 SECTOR_CONSTITUENTS = {
@@ -87,7 +87,9 @@ SECTOR_CONSTITUENTS = {
     "Smallcap": ["CDSL.NS", "ANGELONE.NS", "KFINTECH.NS", "SUZLON.NS", "BSOFT.NS"],
     "Infra": ["LT.NS", "HFCL.NS"],
     "Financials": ["BAJFINANCE.NS", "CDSL.NS", "IEX.NS"],
-    "Healthcare": ["MAXHEALTH.NS"]
+    "Healthcare": ["MAXHEALTH.NS"],
+    "PSU": ["SBIN.NS", "PNB.NS", "BANKBARODA.NS", "CANBK.NS"],
+    "Railways": ["IRFC.NS", "RVNL.NS", "IRCON.NS"]
 }
 
 @st.cache_data(ttl=300)
@@ -171,8 +173,9 @@ for idx, sec in enumerate(["Banking", "IT", "Auto", "Energy", "FMCG", "Metal"]):
     sec_cols[idx % 6].metric(sec, f"{'+' if sec_ret >= 0 else ''}{sec_ret:.2f}%")
 st.markdown("---")
 
-# --- 5. EXPANDED UNIVERSE METADATA REGISTRY ---
+# --- 5. EXPANDED UNIVERSE METADATA REGISTRY (> 100+ Stocks added high volatile/low price) ---
 STOCK_METADATA = {
+    # NIFTY 50 HEAVYWEIGHTS
     "RELIANCE": {"index": "Nifty 50", "sector": "Energy", "query": "Reliance Industries"},
     "TCS": {"index": "Nifty 50", "sector": "IT", "query": "Tata Consultancy Services"},
     "HDFCBANK": {"index": "Nifty 50", "sector": "Banking", "query": "HDFC Bank"},
@@ -192,6 +195,15 @@ STOCK_METADATA = {
     "TATASTEEL": {"index": "Nifty 50", "sector": "Metal", "query": "Tata Steel"},
     "NTPC": {"index": "Nifty 50", "sector": "Energy", "query": "NTPC"},
     "M&M": {"index": "Nifty 50", "sector": "Auto", "query": "Mahindra and Mahindra"},
+    "ONGC": {"index": "Nifty 50", "sector": "Energy", "query": "ONGC"},
+    "POWERGRID": {"index": "Nifty 50", "sector": "Energy", "query": "Power Grid Corporation"},
+    "COALINDIA": {"index": "Nifty 50", "sector": "Energy", "query": "Coal India"},
+    "HINDALCO": {"index": "Nifty 50", "sector": "Metal", "query": "Hindalco Industries"},
+    "JSWSTEEL": {"index": "Nifty 50", "sector": "Metal", "query": "JSW Steel"},
+    "ADANIPORTS": {"index": "Nifty 50", "sector": "Infra", "query": "Adani Ports"},
+    "ADANIENT": {"index": "Nifty 50", "sector": "Diversified", "query": "Adani Enterprises"},
+    
+    # NIFTY MIDCAP (Adding high beta & volume)
     "TATAPOWER": {"index": "Nifty Midcap", "sector": "Energy", "query": "Tata Power"},
     "FEDERALBNK": {"index": "Nifty Midcap", "sector": "Banking", "query": "Federal Bank"},
     "POLYCAB": {"index": "Nifty Midcap", "sector": "Capital Goods", "query": "Polycab"},
@@ -200,6 +212,30 @@ STOCK_METADATA = {
     "ASHOKLEY": {"index": "Nifty Midcap", "sector": "Auto", "query": "Ashok Leyland"},
     "MAXHEALTH": {"index": "Nifty Midcap", "sector": "Healthcare", "query": "Max Healthcare"},
     "VOLTAS": {"index": "Nifty Midcap", "sector": "Consumer Durables", "query": "Voltas"},
+    "IDFCFIRSTB": {"index": "Nifty Midcap", "sector": "Banking", "query": "IDFC First Bank"},
+    "YESBANK": {"index": "Nifty Midcap", "sector": "Banking", "query": "Yes Bank"},
+    "PNB": {"index": "Nifty Midcap", "sector": "PSU", "query": "Punjab National Bank"},
+    "BANKBARODA": {"index": "Nifty Midcap", "sector": "PSU", "query": "Bank of Baroda"},
+    "UNIONBANK": {"index": "Nifty Midcap", "sector": "PSU", "query": "Union Bank of India"},
+    "BHEL": {"index": "Nifty Midcap", "sector": "Capital Goods", "query": "Bharat Heavy Electricals"},
+    "BEL": {"index": "Nifty Midcap", "sector": "Defence", "query": "Bharat Electronics"},
+    "HAL": {"index": "Nifty Midcap", "sector": "Defence", "query": "Hindustan Aeronautics"},
+    "IRFC": {"index": "Nifty Midcap", "sector": "Railways", "query": "Indian Railway Finance Corp"},
+    "RVNL": {"index": "Nifty Midcap", "sector": "Railways", "query": "Rail Vikas Nigam"},
+    "IREDA": {"index": "Nifty Midcap", "sector": "Financials", "query": "IREDA"},
+    "NHPC": {"index": "Nifty Midcap", "sector": "Energy", "query": "NHPC"},
+    "ZOMATO": {"index": "Nifty Midcap", "sector": "Consumer Services", "query": "Zomato"},
+    "PAYTM": {"index": "Nifty Midcap", "sector": "Financials", "query": "Paytm"},
+    "JIOFIN": {"index": "Nifty Midcap", "sector": "Financials", "query": "Jio Financial Services"},
+    "NYKAA": {"index": "Nifty Midcap", "sector": "Consumer Services", "query": "Nykaa"},
+    "TVSMOTOR": {"index": "Nifty Midcap", "sector": "Auto", "query": "TVS Motor"},
+    "DIXON": {"index": "Nifty Midcap", "sector": "Consumer Durables", "query": "Dixon Technologies"},
+    "CUMMINSIND": {"index": "Nifty Midcap", "sector": "Capital Goods", "query": "Cummins India"},
+    "NMDC": {"index": "Nifty Midcap", "sector": "Metal", "query": "NMDC"},
+    "SAIL": {"index": "Nifty Midcap", "sector": "Metal", "query": "Steel Authority of India"},
+    "GMRINFRA": {"index": "Nifty Midcap", "sector": "Infra", "query": "GMR Airports Infrastructure"},
+    
+    # NIFTY SMALLCAP (High Volatility, Liquidity sweeps magnets)
     "CDSL": {"index": "Nifty Smallcap", "sector": "Financials", "query": "CDSL"},
     "ANGELONE": {"index": "Nifty Smallcap", "sector": "Financials", "query": "Angel One"},
     "KFINTECH": {"index": "Nifty Smallcap", "sector": "Financials", "query": "KFin Technologies"},
@@ -207,13 +243,49 @@ STOCK_METADATA = {
     "BSOFT": {"index": "Nifty Smallcap", "sector": "IT", "query": "Birlasoft"},
     "HFCL": {"index": "Nifty Smallcap", "sector": "Infra", "query": "HFCL"},
     "IEX": {"index": "Nifty Smallcap", "sector": "Financials", "query": "Indian Energy Exchange"},
-    "KEI": {"index": "Nifty Smallcap", "sector": "Capital Goods", "query": "KEI Industries"}
+    "KEI": {"index": "Nifty Smallcap", "sector": "Capital Goods", "query": "KEI Industries"},
+    "SJVN": {"index": "Nifty Smallcap", "sector": "Energy", "query": "SJVN"},
+    "NBCC": {"index": "Nifty Smallcap", "sector": "Infra", "query": "NBCC India"},
+    "HUDCO": {"index": "Nifty Smallcap", "sector": "Financials", "query": "HUDCO"},
+    "IDEA": {"index": "Nifty Smallcap", "sector": "Telecom", "query": "Vodafone Idea"},
+    "RPOWER": {"index": "Nifty Smallcap", "sector": "Energy", "query": "Reliance Power"},
+    "JPPOWER": {"index": "Nifty Smallcap", "sector": "Energy", "query": "Jaiprakash Power"},
+    "SOUTHBANK": {"index": "Nifty Smallcap", "sector": "Banking", "query": "South Indian Bank"},
+    "UCOBANK": {"index": "Nifty Smallcap", "sector": "PSU", "query": "UCO Bank"},
+    "IOB": {"index": "Nifty Smallcap", "sector": "PSU", "query": "Indian Overseas Bank"},
+    "MAHABANK": {"index": "Nifty Smallcap", "sector": "PSU", "query": "Bank of Maharashtra"},
+    "CENTRALBK": {"index": "Nifty Smallcap", "sector": "PSU", "query": "Central Bank of India"},
+    "HCC": {"index": "Nifty Smallcap", "sector": "Infra", "query": "Hindustan Construction Company"},
+    "RENUKA": {"index": "Nifty Smallcap", "sector": "FMCG", "query": "Shree Renuka Sugars"},
+    "TRIDENT": {"index": "Nifty Smallcap", "sector": "Textiles", "query": "Trident"},
+    "EASEMYTRIP": {"index": "Nifty Smallcap", "sector": "Consumer Services", "query": "Easy Trip Planners"},
+    "IRCTC": {"index": "Nifty Smallcap", "sector": "Railways", "query": "IRCTC"},
+    "NATIONALUM": {"index": "Nifty Smallcap", "sector": "Metal", "query": "National Aluminium Company"},
+    "BSE": {"index": "Nifty Smallcap", "sector": "Financials", "query": "BSE Limited"},
+    "MCX": {"index": "Nifty Smallcap", "sector": "Financials", "query": "Multi Commodity Exchange"},
+    "IRCON": {"index": "Nifty Smallcap", "sector": "Railways", "query": "IRCON International"},
+    "RAILTEL": {"index": "Nifty Smallcap", "sector": "Railways", "query": "RailTel Corporation"}
 }
 
 # --- 6. TECHNICAL INDICATORS & NEWS INGESTION ---
 def compute_vwap(df):
     tp = (df['High'] + df['Low'] + df['Close']) / 3.0
     return (tp * df['Volume']).cumsum() / (df['Volume'].cumsum() + 1e-5)
+
+def compute_rsi(series, period=14):
+    delta = series.diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
+    rs = gain / (loss + 1e-5)
+    return 100 - (100 / (1 + rs))
+
+def compute_macd(series, fast=12, slow=26, signal=9):
+    ema_fast = series.ewm(span=fast, adjust=False).mean()
+    ema_slow = series.ewm(span=slow, adjust=False).mean()
+    macd_line = ema_fast - ema_slow
+    signal_line = macd_line.ewm(span=signal, adjust=False).mean()
+    macd_hist = macd_line - signal_line
+    return macd_line, signal_line, macd_hist
 
 @st.cache_data(ttl=900)
 def fetch_validated_news(ticker):
@@ -258,8 +330,8 @@ def fetch_validated_news(ticker):
     except Exception:
         return 0.0, "News Feed Operational"
 
-# --- 7. SYNCHRONIZED SMC DETECTOR ENGINE ---
-def detect_synchronized_smc(df_5m):
+# --- 7. SYNCHRONIZED SMC & ANTICIPATORY ENGINE ---
+def detect_synchronized_smc(df_5m, df_1d=None):
     if len(df_5m) < 30:
         return []
     
@@ -269,13 +341,17 @@ def detect_synchronized_smc(df_5m):
 
     df['ATR'] = (df['High'] - df['Low']).rolling(14).mean()
     df['VWAP'] = compute_vwap(df)
+    df['RSI'] = compute_rsi(df['Close'], 14)
+    _, _, df['MACD_Hist'] = compute_macd(df['Close'])
     
     last_price = float(df['Close'].iloc[-1])
-    zones = []
+    last_rsi = float(df['RSI'].iloc[-1])
     
-    lookback = min(60, len(df) - 3)
+    zones = []
+    lookback = min(100, len(df) - 3)
     start_i = len(df) - lookback
     
+    # --- A. CLASSIC ORDER BLOCKS (Existing Logic Maintained & Synchronized) ---
     for i in range(start_i, len(df) - 2):
         candle_time = df.index[i]
         c_open, c_close = float(df['Open'].iloc[i]), float(df['Close'].iloc[i])
@@ -330,7 +406,7 @@ def detect_synchronized_smc(df_5m):
                         'start_time': candle_time, 'state': state, 'state_val': state_val, 'bias': 'SELL'
                     })
 
-    # Liquidity Sweeps
+    # --- B. LIQUIDITY SWEEPS (Original Execution Sweeps) ---
     recent_swings_low = df['Low'].iloc[-30:-3].min()
     recent_swings_high = df['High'].iloc[-30:-3].max()
     curr_low, curr_high = float(df['Low'].iloc[-1]), float(df['High'].iloc[-1])
@@ -347,6 +423,49 @@ def detect_synchronized_smc(df_5m):
             'type': 'Liquidity Sweep High', 'top': curr_high, 'bottom': recent_swings_high * 0.999,
             'start_time': df.index[-1], 'state': "🔴 LIQUIDITY SWEEP (BEARISH REVERSAL)", 'state_val': 3, 'bias': 'SELL'
         })
+
+    # --- C. NEW: ANTICIPATORY LIQUIDITY POOLS (EQH / EQL BEFORE SWEEP) ---
+    # Find Major Swing Highs and Lows in the lookback window
+    window_df = df.iloc[start_i:]
+    swing_highs = window_df['High'][window_df['High'] == window_df['High'].rolling(11, center=True).max()].dropna()
+    swing_lows = window_df['Low'][window_df['Low'] == window_df['Low'].rolling(11, center=True).min()].dropna()
+    
+    # Identify Pending Buy-Side Liquidity (Equal Highs or Major Swings)
+    if not swing_highs.empty:
+        major_high = float(swing_highs.max())
+        if major_high * 0.998 <= last_price <= major_high * 1.002: # Price rapidly approaching within 0.2%
+            if last_rsi > 70: # Momentum exhaustion syncing
+                zones.append({
+                    'type': 'Pending Buy-Side Liquidity (EQH)', 'top': major_high * 1.002, 'bottom': major_high * 0.998,
+                    'start_time': df.index[-1], 'state': "⚠️ IMMINENT SWEEP / SHORT REVERSAL ZONE", 'state_val': 4, 'bias': 'SELL'
+                })
+
+    # Identify Pending Sell-Side Liquidity (Equal Lows or Major Swings)
+    if not swing_lows.empty:
+        major_low = float(swing_lows.min())
+        if major_low * 0.998 <= last_price <= major_low * 1.002: # Price rapidly approaching within 0.2%
+            if last_rsi < 30: # Momentum exhaustion syncing
+                zones.append({
+                    'type': 'Pending Sell-Side Liquidity (EQL)', 'top': major_low * 1.002, 'bottom': major_low * 0.998,
+                    'start_time': df.index[-1], 'state': "⚠️ IMMINENT SWEEP / LONG REVERSAL ZONE", 'state_val': 4, 'bias': 'BUY'
+                })
+
+    # --- D. NEW: INSTITUTIONAL VOLUME NODES (Point of Control Projection) ---
+    if 'Volume' in window_df.columns:
+        vol_df = window_df[['Close', 'Volume']].dropna()
+        if not vol_df.empty:
+            # Bin prices to find where institutions parked maximum volume
+            bins = np.linspace(vol_df['Close'].min(), vol_df['Close'].max(), 20)
+            vol_df['bins'] = pd.cut(vol_df['Close'], bins)
+            poc_bin = vol_df.groupby('bins')['Volume'].sum().idxmax()
+            if poc_bin:
+                poc_mid = poc_bin.mid
+                if poc_mid * 0.998 <= last_price <= poc_mid * 1.002:
+                    bias = 'BUY' if last_price >= poc_mid else 'SELL'
+                    zones.append({
+                        'type': 'Institutional Volume Node (POC)', 'top': float(poc_bin.right), 'bottom': float(poc_bin.left),
+                        'start_time': vol_df.index[0], 'state': "🔥 PRICE AT INSTITUTIONAL POC", 'state_val': 4, 'bias': bias
+                    })
 
     return zones
 
@@ -394,13 +513,18 @@ if run_scan:
             ema_20 = float(close_5m.ewm(span=20, adjust=False).mean().iloc[-1])
             atr_14 = float((high_5m - low_5m).tail(14).mean())
             
+            # Momentum Synchronization
+            rsi_14 = float(compute_rsi(close_5m).iloc[-1])
+            _, _, macd_hist = compute_macd(close_5m)
+            macd_hist_val = float(macd_hist.iloc[-1])
+            
             avg_vol = float(vol_5m.tail(20).mean())
             rvol = float(vol_5m.iloc[-1] / (avg_vol + 1e-5))
 
             pdh = float(df_1d["High"].dropna().iloc[-2]) if len(df_1d) >= 2 else float(high_5m.max())
             pdl = float(df_1d["Low"].dropna().iloc[-2]) if len(df_1d) >= 2 else float(low_5m.min())
 
-            smc_zones = detect_synchronized_smc(df_5m)
+            smc_zones = detect_synchronized_smc(df_5m, df_1d)
             news_score, news_context = fetch_validated_news(ticker)
 
             best_zone = sorted(smc_zones, key=lambda x: x['state_val'], reverse=True)[0] if smc_zones else None
@@ -410,14 +534,25 @@ if run_scan:
             
             if best_zone:
                 trade_bias = best_zone['bias']
-                score += 35.0 if best_zone['state_val'] == 3 else (20.0 if best_zone['state_val'] == 2 else 10.0)
+                # Significantly boost score for Anticipatory states (State Val 4)
+                if best_zone['state_val'] == 4:
+                    score += 50.0 
+                elif best_zone['state_val'] == 3:
+                    score += 35.0
+                elif best_zone['state_val'] == 2:
+                    score += 20.0
+                else:
+                    score += 10.0
             else:
                 trade_bias = "BUY" if last_price > vwap_val else "SELL"
 
+            # Trend & VWAP Synchronization
             if trade_bias == "BUY" and last_price > vwap_val and last_price > ema_20:
                 score += 25.0
+                if rsi_14 > 40 and macd_hist_val > 0: score += 10.0 # Momentum alignment
             elif trade_bias == "SELL" and last_price < vwap_val and last_price < ema_20:
                 score += 25.0
+                if rsi_14 < 60 and macd_hist_val < 0: score += 10.0 # Momentum alignment
 
             if rvol >= 1.5: score += 15.0
             elif rvol >= 1.0: score += 8.0
@@ -450,6 +585,7 @@ if run_scan:
                 "Bias": "🟩 BUY" if trade_bias == "BUY" else "🟥 SELL",
                 "SMC State": best_zone['state'] if best_zone else "NO ACTIVE SMC ZONE",
                 "VWAP Alignment": "✅ ABOVE VWAP" if last_price > vwap_val else "🔻 BELOW VWAP",
+                "RSI/MOMENTUM": f"{rsi_14:.1f}",
                 "RVOL": f"{rvol:.2f}x",
                 "Target": f"₹{tgt_price:.2f} (+{reward_pct:.1f}%)",
                 "Stop Loss": f"₹{sl_price:.2f} (-{risk_pct:.1f}%)",
@@ -475,7 +611,7 @@ if run_scan:
 if "scan_results" in st.session_state:
     res_df = st.session_state["scan_results"]
     
-    st.subheader("🎯 Top Actionable Institutional Setups")
+    st.subheader("🎯 Top Actionable Institutional Setups (Synced with Volume Nodes & Liquidity)")
     card_cols = st.columns(3)
     for idx in range(min(3, len(res_df))):
         row = res_df.iloc[idx]
@@ -487,7 +623,7 @@ if "scan_results" in st.session_state:
             )
             st.write(f"**SMC State:** `{row['SMC State']}`")
             st.write(f"**Target:** {row['Target']} | **SL:** {row['Stop Loss']}")
-            st.write(f"**R:R:** `{row['R:R']}` | **RVOL:** `{row['RVOL']}`")
+            st.write(f"**R:R:** `{row['R:R']}` | **RVOL:** `{row['RVOL']}` | **RSI:** `{row['RSI/MOMENTUM']}`")
 
     st.markdown("---")
     st.subheader("📈 Live Visual SMC Charts (Rank 1, Rank 2 & Rank 3 Setups)")
@@ -503,7 +639,7 @@ if "scan_results" in st.session_state:
         for i in range(num_charts):
             with chart_tabs[i]:
                 stock_ticker = res_df.iloc[i]['Ticker_Raw']
-                df_chart, _ = fetch_stock_data(stock_ticker)
+                df_chart, df_chart_1d = fetch_stock_data(stock_ticker)
                 
                 if df_chart is not None and not df_chart.empty:
                     if isinstance(df_chart.columns, pd.MultiIndex):
@@ -520,10 +656,15 @@ if "scan_results" in st.session_state:
                     fig.add_trace(go.Scatter(x=df_chart.index, y=df_chart['VWAP'], line=dict(color='orange', width=1.5), name="VWAP"))
                     fig.add_trace(go.Scatter(x=df_chart.index, y=df_chart['EMA20'], line=dict(color='cyan', width=1), name="EMA 20"))
                     
-                    zones = detect_synchronized_smc(df_chart)
+                    zones = detect_synchronized_smc(df_chart, df_chart_1d)
                     for zone in zones:
-                        color = "rgba(0, 255, 0, 0.25)" if zone['bias'] == 'BUY' else "rgba(255, 0, 0, 0.25)"
-                        line_color = "green" if zone['bias'] == 'BUY' else "red"
+                        # Differentiate Anticipatory Zones (Yellow/Purple) from Standard execution (Green/Red)
+                        if 'Pending' in zone['type'] or 'POC' in zone['type']:
+                            color = "rgba(255, 165, 0, 0.25)" if zone['bias'] == 'BUY' else "rgba(128, 0, 128, 0.25)"
+                            line_color = "yellow" if zone['bias'] == 'BUY' else "fuchsia"
+                        else:
+                            color = "rgba(0, 255, 0, 0.25)" if zone['bias'] == 'BUY' else "rgba(255, 0, 0, 0.25)"
+                            line_color = "green" if zone['bias'] == 'BUY' else "red"
                         
                         fig.add_shape(
                             type="rect",
@@ -545,7 +686,7 @@ if "scan_results" in st.session_state:
                         )
 
                     fig.update_layout(
-                        title=f"Rank #{i+1} Setup: {stock_ticker} - SMC Zone Rectangles, VWAP & Confluence",
+                        title=f"Rank #{i+1} Setup: {stock_ticker} - Sync'd Anticipatory Liquidity & Vol Nodes",
                         xaxis_rangeslider_visible=False,
                         template="plotly_dark",
                         height=520,
@@ -558,7 +699,7 @@ if "scan_results" in st.session_state:
     
     display_cols = [
         "Rank", "Stock", "Index", "Sector", "Bias", "Confluence Score", 
-        "Last Price", "SMC State", "VWAP Alignment", "RVOL", 
+        "Last Price", "SMC State", "VWAP Alignment", "RSI/MOMENTUM", "RVOL", 
         "Target", "Stop Loss", "R:R", "News / Catalysts"
     ]
     st.dataframe(res_df[display_cols], height=400, use_container_width=True)
