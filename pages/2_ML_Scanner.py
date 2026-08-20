@@ -565,4 +565,3 @@ if "scan_results" in st.session_state:
     
     csv = res_df[display_cols].to_csv(index=False).encode('utf-8')
     st.download_button("📥 Download Institutional Scan Results (CSV)", data=csv, file_name="synchronized_institutional_scan.csv", mime="text/csv")
-```[cite: 1]
