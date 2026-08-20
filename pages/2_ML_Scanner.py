@@ -54,22 +54,31 @@ st.sidebar.write(f"**Source:** {current_source}")
 if "Yahoo Finance" in current_source and "upstox_error_log" in st.session_state:
     with st.sidebar.expander("View Upstox Error Log"):
         st.write(st.session_state["upstox_error_log"])
-# --- 3. DATA FETCH ENGINE (UPSTOX VIA SESSION STATE WITH YFINANCE FALLBACK) ---
+# --- 3. DATA FETCH ENGINE (WITH ERROR EXPOSURE) ---
 def fetch_stock_data(ticker):
+    """
+    Data Fetch Pipeline with error exposure to see why Upstox is failing on Page 2.
+    """
     if "upstox_client" in st.session_state and st.session_state.get("upstox_client"):
         try:
             upstox = st.session_state["upstox_client"]
+            
+            # NOTE: Upstox API v3 often requires exchange prefixes like 'NSE_EQ|RELIANCE' 
+            # or clean symbols. Let's test with the raw ticker first.
             df_5m = upstox.get_ohlc(ticker, interval="5m")
             df_1d = upstox.get_ohlc(ticker, interval="1d")
+            
             if df_5m is not None and not df_5m.empty and df_1d is not None and not df_1d.empty:
-                st.session_state["active_data_source"] = "🟢 Upstox API (Live)"
                 return df_5m, df_1d
+            else:
+                st.sidebar.warning(f"Upstox returned empty data for: {ticker}")
         except Exception as e:
-            st.session_state["upstox_error_log"] = str(e)
-            pass
-    
-    # Fallback occurred
-    st.session_state["active_data_source"] = "🟡 Yahoo Finance (Fallback)"
+            # THIS WILL REVEAL THE REAL ERROR IN YOUR SIDEBAR INSTEAD OF HIDING IT
+            st.sidebar.error(f"Upstox failed on {ticker}: {e}")
+    else:
+        st.sidebar.warning("⚠️ 'upstox_client' session state is missing on Page 2!")
+
+    # Fallback to Yahoo Finance
     yf_symbol = f"{ticker}.NS" if not ticker.endswith(".NS") else ticker
     df_5m = yf.download(yf_symbol, period="5d", interval="5m", progress=False, auto_adjust=True)
     df_1d = yf.download(yf_symbol, period="1mo", interval="1d", progress=False, auto_adjust=True)
