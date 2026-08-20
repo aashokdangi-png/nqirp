@@ -54,6 +54,12 @@ st.sidebar.write(f"**Source:** {current_source}")
 if "Yahoo Finance" in current_source and "upstox_error_log" in st.session_state:
     with st.sidebar.expander("View Upstox Error Log"):
         st.write(st.session_state["upstox_error_log"])
+st.sidebar.markdown("---")
+st.sidebar.markdown("### 🛠️ Session State Inspector")
+if st.sidebar.button("Show Active Session Keys"):
+    st.sidebar.write("Keys available:", list(st.session_state.keys()))
+    for k, v in st.session_state.items():
+        st.sidebar.write(f"- **{k}**: {type(v)}")        
 # --- 3. DATA FETCH ENGINE (WITH ERROR EXPOSURE) ---
 def fetch_stock_data(ticker):
     """
