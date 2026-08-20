@@ -48,13 +48,12 @@ active_sectors = st.sidebar.multiselect(
 
 min_rr_threshold = st.sidebar.slider("Minimum Risk-to-Reward (R:R) Filter", 1.0, 4.0, 1.2, 0.1)
 
-# --- 3. UPSTOX API & DATA FETCH ENGINE ---
 UPSTOX_ISIN_MAP = {
     "RELIANCE": "NSE_EQ|INE002A01018",
     "TCS": "NSE_EQ|INE467B01029",
-    "HDFCBANK": "NSE_EQ|INE040A01034",
     "INFY": "NSE_EQ|INE009A01021",
-    "ICICIBANK": "NSE_EQ|INE090A01021",
+    "HDFCBANK": "NSE_EQ|INE040A01034",
+    "ICICIBANK": "NSE_EQ|INE090A01013",
     "SBIN": "NSE_EQ|INE062A01020",
     "BHARTIARTL": "NSE_EQ|INE397D01024",
     "ITC": "NSE_EQ|INE154A01025",
@@ -70,83 +69,89 @@ UPSTOX_ISIN_MAP = {
     "NTPC": "NSE_EQ|INE733E01010",
     "M&M": "NSE_EQ|INE101A01026",
     "TATAPOWER": "NSE_EQ|INE245A01021",
-    "FEDERALBNK": "NSE_EQ|INE171A01029",
+    "FEDERALBNK": "NSE_EQ|INE028D01010",
     "POLYCAB": "NSE_EQ|INE455K01017",
     "PERSISTENT": "NSE_EQ|INE262H01021",
     "COFORGE": "NSE_EQ|INE591G01017",
     "ASHOKLEY": "NSE_EQ|INE208A01029",
-    "MAXHEALTH": "NSE_EQ|INE275H01029",
+    "MAXHEALTH": "NSE_EQ|INE275F01028",
     "VOLTAS": "NSE_EQ|INE226A01021",
     "CDSL": "NSE_EQ|INE736A01011",
     "ANGELONE": "NSE_EQ|INE732I01013",
-    "KFINTECH": "NSE_EQ|INE138Y01010",
+    "KFINTECH": "NSE_EQ|INE138Y01011",
     "SUZLON": "NSE_EQ|INE040H01021",
-    "BSOFT": "NSE_EQ|INE836A01035",
+    "BSOFT": "NSE_EQ|INE084A01015",
     "HFCL": "NSE_EQ|INE548A01028",
-    "IEX": "NSE_EQ|INE022Q01020",
-    "KEI": "NSE_EQ|INE878B01027"
+    "IEX": "NSE_EQ|INE577H01019",
+    "KEI": "NSE_EQ|INE378B01023",
 }
 
-def get_upstox_access_token():
+def get_upstox_access_token() -> str | None:
     try:
-        return st.secrets.get("UPSTOX_ACCESS_TOKEN") or os.getenv("UPSTOX_ACCESS_TOKEN")
+        if "UPSTOX_ACCESS_TOKEN" in st.secrets:
+            return st.secrets["UPSTOX_ACCESS_TOKEN"]
+        return os.getenv("UPSTOX_ACCESS_TOKEN", None)
     except Exception:
-        return os.getenv("UPSTOX_ACCESS_TOKEN")
+        return None
 
-def fetch_upstox_live(ticker: str, interval: str = "5m") -> pd.DataFrame:
+def fetch_upstox_live(symbol: str, interval: str = "5m") -> pd.DataFrame | None:
     try:
-        token = get_upstox_access_token()
-        if not token:
+        access_token = get_upstox_access_token()
+        if not access_token:
             return None
 
-        clean_ticker = ticker.replace(".NS", "").upper()
-        instrument_key = UPSTOX_ISIN_MAP.get(clean_ticker)
-        if not instrument_key:
-            instrument_key = f"NSE_EQ|INE{clean_ticker}"
+        clean_sym = symbol.upper().replace(".NS", "").replace("&", "_").strip()
+        raw_key = UPSTOX_ISIN_MAP.get(clean_sym, f"NSE_EQ|{clean_sym}")
+        instrument_key = urllib.parse.quote(raw_key, safe="")
+        interval_str = str(interval).lower().strip()
 
-        interval_map = {"5m": "5minute", "1d": "day", "1h": "1hour"}
-        upstox_interval = interval_map.get(interval, "5minute")
+        if "day" in interval_str or "1d" in interval_str:
+            to_date = datetime.now().strftime("%Y-%m-%d")
+            from_date = (datetime.now() - timedelta(days=120)).strftime("%Y-%m-%d")
+            url = f"https://api.upstox.com/v3/historical-candle/{instrument_key}/day/1/{to_date}/{from_date}"
+        else:
+            digits = "".join(filter(str.isdigit, interval_str))
+            int_val = int(digits) if digits else 5
+            url = f"https://api.upstox.com/v3/historical-candle/intraday/{instrument_key}/minutes/{int_val}"
 
-        url = f"https://api.upstox.com/v3/historical-candle/{instrument_key}/{upstox_interval}"
         headers = {
             "Accept": "application/json",
-            "Authorization": f"Bearer {token}"
+            "Authorization": f"Bearer {access_token}",
         }
 
-        res = requests.get(url, headers=headers, timeout=6)
+        res = requests.get(url, headers=headers, timeout=5)
         if res.status_code == 200:
-            data = res.json().get("data", {}).get("candles", [])
-            if not data:
-                return None
-            df = pd.DataFrame(data, columns=["Timestamp", "Open", "High", "Low", "Close", "Volume", "OI"])
-            df["Timestamp"] = pd.to_datetime(df["Timestamp"])
-            df.set_index("Timestamp", inplace=True)
-            df.sort_index(inplace=True)
-            for col in ["Open", "High", "Low", "Close", "Volume"]:
-                df[col] = pd.to_numeric(df[col], errors="coerce")
-            return df
-    except Exception as e:
-        st.error(f"Upstox API Failure: {e}")
+            raw_candles = res.json().get("data", {}).get("candles", [])
+            if raw_candles:
+                df = pd.DataFrame(
+                    raw_candles,
+                    columns=["Datetime", "Open", "High", "Low", "Close", "Volume", "OI"],
+                )
+                df["Datetime"] = pd.to_datetime(df["Datetime"])
+                df = df.sort_values("Datetime").set_index("Datetime")
+                for col in ["Open", "High", "Low", "Close", "Volume"]:
+                    df[col] = pd.to_numeric(df[col], errors="coerce")
+                return df
+    except Exception:
+        pass
     return None
 
 def fetch_stock_data(ticker):
     """
     Data Fetch Pipeline:
-    Primary Attempt -> Upstox API v3
+    Primary Attempt -> Upstox API v3 requests using token from Streamlit Secrets
     Fallback Attempt -> Yahoo Finance (yfinance)
     """
-    try:
-        df_5m = fetch_upstox_live(ticker, interval="5m")
-        df_1d = fetch_upstox_live(ticker, interval="1d")
-        if df_5m is not None and not df_5m.empty and df_1d is not None and not df_1d.empty:
-            return df_5m, df_1d
-    except Exception:
-        pass
+    df_5m = fetch_upstox_live(ticker, interval="5m")
+    df_1d = fetch_upstox_live(ticker, interval="1d")
     
+    if df_5m is not None and not df_5m.empty and df_1d is not None and not df_1d.empty:
+        return df_5m, df_1d
+        
     yf_symbol = f"{ticker}.NS" if not ticker.endswith(".NS") else ticker
-    df_5m = yf.download(yf_symbol, period="5d", interval="5m", progress=False, auto_adjust=True)
-    df_1d = yf.download(yf_symbol, period="1mo", interval="1d", progress=False, auto_adjust=True)
-    return df_5m, df_1d
+    df_5m_yf = yf.download(yf_symbol, period="5d", interval="5m", progress=False, auto_adjust=True)
+    df_1d_yf = yf.download(yf_symbol, period="1mo", interval="1d", progress=False, auto_adjust=True)
+    return df_5m_yf, df_1d_yf
 
 # --- 4. MARKET SENTIMENT & FII / DII NET ORDER FLOW ENGINE ---
 SECTOR_MAP = {
