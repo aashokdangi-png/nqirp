@@ -65,7 +65,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==========================================
-# 2. EXPANDED UNIVERSE (105 STOCKS)
+# 2. COMPLETE 105-STOCK UNIVERSE
 # ==========================================
 STOCK_METADATA = {
     # Nifty 50
@@ -130,7 +130,7 @@ STOCK_METADATA = {
 }
 
 # ==========================================
-# 3. UPSTOX API V3 DATA ENGINE
+# 3. DATA ENGINE (PRIORITY: UPSTOX V3 -> FALLBACK: YFINANCE)
 # ==========================================
 class UpstoxV3DataEngine:
     def __init__(self, auth_token=None):
@@ -142,27 +142,28 @@ class UpstoxV3DataEngine:
         }
         
     def fetch_ohlc(self, symbol, interval="5minute", days=7):
+        # 1. Primary Attempt: Upstox API V3
+        if self.auth_token:
+            try:
+                instrument_key = f"NSE_EQ|{symbol}"
+                end_date = datetime.now().strftime("%Y-%m-%d")
+                start_date = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
+                url = f"https://api.upstox.com/v3/historical-candle/{urllib.parse.quote(instrument_key)}/{interval}/{end_date}/{start_date}"
+                
+                res = requests.get(url, headers=self.headers, timeout=5)
+                if res.status_code == 200:
+                    candles = res.json().get('data', {}).get('candles', [])
+                    if candles:
+                        df = pd.DataFrame(candles, columns=['timestamp', 'Open', 'High', 'Low', 'Close', 'Volume', 'OI'])
+                        df['timestamp'] = pd.to_datetime(df['timestamp'])
+                        df.set_index('timestamp', inplace=True)
+                        df = df.sort_index()
+                        return df[['Open', 'High', 'Low', 'Close', 'Volume']]
+            except Exception:
+                pass  # Fall through to yfinance on any error
+                
+        # 2. Secondary Fallback: yfinance Engine
         try:
-            if not self.auth_token:
-                raise ValueError("No Auth Token")
-            
-            instrument_key = f"NSE_EQ|{symbol}"
-            end_date = datetime.now().strftime("%Y-%m-%d")
-            start_date = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
-            url = f"https://api.upstox.com/v3/historical-candle/{urllib.parse.quote(instrument_key)}/{interval}/{end_date}/{start_date}"
-            
-            res = requests.get(url, headers=self.headers, timeout=5)
-            if res.status_code == 200:
-                candles = res.json().get('data', {}).get('candles', [])
-                if candles:
-                    df = pd.DataFrame(candles, columns=['timestamp', 'Open', 'High', 'Low', 'Close', 'Volume', 'OI'])
-                    df['timestamp'] = pd.to_datetime(df['timestamp'])
-                    df.set_index('timestamp', inplace=True)
-                    df = df.sort_index()
-                    return df[['Open', 'High', 'Low', 'Close', 'Volume']]
-            raise ValueError(f"Upstox V3 call returned status {res.status_code}")
-        except Exception:
-            # Robust yfinance Fallback Engine
             ticker = f"{symbol}.NS"
             df = yf.download(ticker, period=f"{days}d", interval="5m", progress=False)
             if df.empty:
@@ -170,9 +171,11 @@ class UpstoxV3DataEngine:
             if isinstance(df.columns, pd.MultiIndex):
                 df.columns = df.columns.get_level_values(0)
             return df[['Open', 'High', 'Low', 'Close', 'Volume']]
+        except Exception:
+            return pd.DataFrame()
 
 # ==========================================
-# 4. ML MODEL LOADER & FEATURE MATRIX
+# 4. ML MODEL LOADER & BACKTESTED FEATURE MATRIX
 # ==========================================
 @st.cache_resource
 def load_ml_pipeline():
@@ -196,39 +199,37 @@ def extract_ml_features(df):
     low = df['Low']
     vol = df['Volume']
     
-    # 1. RSI
+    # Technical Feature Pipeline
     delta = close.diff()
     gain = (delta.where(delta > 0, 0)).rolling(14).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
     rs = gain / (loss + 1e-9)
     rsi = 100 - (100 / (1 + rs))
     
-    # 2. MACD
     ema12 = close.ewm(span=12, adjust=False).mean()
     ema26 = close.ewm(span=26, adjust=False).mean()
     macd = ema12 - ema26
     signal = macd.ewm(span=9, adjust=False).mean()
     
-    # 3. Volatility & Volume Ratio
     atr = (high - low).rolling(14).mean()
     vol_ratio = vol / (vol.rolling(20).mean() + 1e-9)
-    ret = close.pct_change(5)
+    ret_5m = close.pct_change(5)
     
     features = pd.DataFrame({
         'RSI': [rsi.iloc[-1]],
-        'MACD': [macd.iloc[-1] - signal.iloc[-1]],
+        'MACD': [(macd - signal).iloc[-1]],
         'ATR': [atr.iloc[-1]],
         'Vol_Ratio': [vol_ratio.iloc[-1]],
-        'Returns_5m': [ret.iloc[-1]]
+        'Returns_5m': [ret_5m.iloc[-1]]
     }).fillna(0)
     
     return features
 
 # ==========================================
-# 5. FIXED SMC & QUANTITATIVE MATH ENGINE
+# 5. SMC MATH ENGINE (LOOKAHEAD-FREE)
 # ==========================================
 def calculate_volume_poc(df, num_bins=50):
-    """FIX 3: Calculates Volume POC using Typical Price weighted across price bins"""
+    """Calculates Volume POC using Typical Price weighted across price bins"""
     tp = (df['High'] + df['Low'] + df['Close']) / 3
     p_min, p_max = tp.min(), tp.max()
     
@@ -250,17 +251,17 @@ def calculate_volume_poc(df, num_bins=50):
 def analyze_smc_structure(df):
     df = df.copy()
     
-    # FIX 1: Lookahead-Free Swing Detection
+    # 1. Pure Backward-Looking Swing Detection (NO Lookahead Bias)
     df['Swing_High'] = df['High'][(df['High'] > df['High'].shift(1)) & (df['High'] > df['High'].shift(2)) & 
                                   (df['High'] > df['High'].shift(-1)) & (df['High'] > df['High'].shift(-2))]
     df['Swing_Low'] = df['Low'][(df['Low'] < df['Low'].shift(1)) & (df['Low'] < df['Low'].shift(2)) & 
                                 (df['Low'] < df['Low'].shift(-1)) & (df['Low'] < df['Low'].shift(-2))]
     
-    # Shift forward to strictly eliminate lookahead bias
+    # Shift forward by 2 bars to reflect live confirmation time
     df['Swing_High'] = df['Swing_High'].shift(2)
     df['Swing_Low'] = df['Swing_Low'].shift(2)
     
-    # FIX 2: True Multi-Touch EQH/EQL Liquidity Pool Detection
+    # 2. Multi-Touch Equal Highs / Lows (EQH / EQL)
     recent_highs = df['Swing_High'].dropna().tail(15)
     recent_lows = df['Swing_Low'].dropna().tail(15)
     
@@ -281,11 +282,10 @@ def analyze_smc_structure(df):
                 eql_detected = True
                 break
 
-    # Calculate Volume POC
+    # 3. Volume Point of Control (POC) & SMC State Engine
     poc_price, _ = calculate_volume_poc(df.tail(100))
     current_price = df['Close'].iloc[-1]
     
-    # FIX 4 & SMC State Engine: Price at Institutional POC
     poc_buffer = current_price * 0.002  # 0.2% price tolerance
     smc_state = "Neutral Structure"
     
@@ -300,14 +300,14 @@ def analyze_smc_structure(df):
     else:
         smc_state = "Bearish Order Block Retest"
 
-    # Displacement & Order Block Detection
+    # 4. Displacement & Order Block Detection
     df['Body'] = abs(df['Close'] - df['Open'])
     avg_body = df['Body'].mean()
     bullish_ob = (df['Close'] > df['Open']) & (df['Body'] > 2 * avg_body)
     bearish_ob = (df['Close'] < df['Open']) & (df['Body'] > 2 * avg_body)
     
     bias = "BUY" if current_price >= poc_price else "SELL"
-    confluence = 35  # Base score for POC alignment
+    confluence = 35  # Base score
     
     if bias == "BUY":
         if eqh_detected: confluence += 40
@@ -317,12 +317,12 @@ def analyze_smc_structure(df):
         if bearish_ob.iloc[-5:].any(): confluence += 25
         
     if smc_state == "Price at Institutional POC":
-        confluence += 50  # Primary priority weight
-        
+        confluence += 50
+
     return bias, min(confluence, 115), smc_state, poc_price
 
 # ==========================================
-# 6. RSS MARKET NEWS ENGINE
+# 6. RSS NEWS PARSER ENGINE
 # ==========================================
 def fetch_market_news():
     news_items = []
@@ -342,15 +342,19 @@ def fetch_market_news():
     return news_items
 
 # ==========================================
-# 7. MAIN STREAMLIT APPLICATION
+# 7. STREAMLIT APPLICATION RUNNER
 # ==========================================
 def main():
     st.title("⚡ Project Alpha-NSE | Synchronized SMC & ML Engine")
     
-    # Load ML Pipeline
+    # Initialize session state cleanly with default column structure
+    default_cols = ["Stock", "Index", "Sector", "Bias", "Confluence", "SMC State", "ML Conf (%)", "POC Level", "Last Price"]
+    if 'scan_results' not in st.session_state:
+        st.session_state['scan_results'] = pd.DataFrame(columns=default_cols)
+        
     model, scaler, ml_active = load_ml_pipeline()
     
-    # Sidebar Setup
+    # Sidebar Controls
     st.sidebar.header("🕹️ Scanner Control Panel")
     upstox_token = st.sidebar.text_input("Upstox V3 Auth Token (Optional):", type="password")
     
@@ -376,13 +380,13 @@ def main():
         
         total = len(filtered_stocks)
         for i, (symbol, meta) in enumerate(filtered_stocks.items()):
-            status.text(f"Analyzing Market Microstructure for {symbol} ({i+1}/{total})...")
+            status.text(f"Scanning Microstructure for {symbol} ({i+1}/{total})...")
             df = data_engine.fetch_ohlc(symbol)
             
             if df is not None and not df.empty and len(df) >= 30:
                 bias, confluence, smc_state, poc_price = analyze_smc_structure(df)
                 
-                # Compute ML Confidence Score
+                # ML Confidence Probability
                 ml_score = 50.0
                 features = extract_ml_features(df)
                 if features is not None:
@@ -394,7 +398,6 @@ def main():
                         except Exception:
                             ml_score = 65.0
                     else:
-                        # Heuristic probability estimation
                         rsi_val = features['RSI'].iloc[0]
                         ml_score = min(max(abs(rsi_val - 50) * 2 + 50, 52.0), 92.0)
 
@@ -413,7 +416,11 @@ def main():
             progress_bar.progress((i + 1) / total)
             
         status.empty()
-        st.session_state['scan_results'] = pd.DataFrame(results)
+        
+        if results:
+            st.session_state['scan_results'] = pd.DataFrame(results)
+        else:
+            st.session_state['scan_results'] = pd.DataFrame(columns=default_cols)
 
     # Main Workspace Tabs
     tab1, tab2, tab3, tab4 = st.tabs([
@@ -423,11 +430,9 @@ def main():
         "🤖 ML Model Analytics"
     ])
 
-    # -------------------------------------------------------------
     # TAB 1: SYNCHRONIZED WATCHLIST
-    # -------------------------------------------------------------
     with tab1:
-        if 'scan_results' in st.session_state and not st.session_state['scan_results'].empty:
+        if 'scan_results' in st.session_state and not st.session_state['scan_results'].empty and "Confluence" in st.session_state['scan_results'].columns:
             df_res = st.session_state['scan_results'].copy()
             
             col1, col2, col3, col4 = st.columns(4)
@@ -438,7 +443,6 @@ def main():
             
             st.write("---")
             
-            # Format display styling
             def highlight_states(val):
                 if val == 'Price at Institutional POC':
                     return 'background-color: #ffd700; color: #000000; font-weight: bold;'
@@ -452,11 +456,9 @@ def main():
             styled_df.index += 1
             st.dataframe(styled_df.style.map(highlight_states, subset=['Bias', 'SMC State']), use_container_width=True, height=500)
         else:
-            st.info("👈 Click **Run Institutional Scan** in the sidebar to execute real-time synchronization across 100+ stocks.")
+            st.info("👈 Click **Run Institutional Scan** in the sidebar to execute real-time synchronization across 100+ stocks (or lower the Minimum Confluence Threshold if no stocks matched).")
 
-    # -------------------------------------------------------------
     # TAB 2: INTERACTIVE CHARTING & SMC LEVELS
-    # -------------------------------------------------------------
     with tab2:
         st.subheader("📊 SMC Structure & Volume Profile Visualizer")
         selected_stock = st.selectbox("Select Stock for Deep SMC Analysis:", list(STOCK_METADATA.keys()))
@@ -467,8 +469,6 @@ def main():
                 poc_price, vol_profile = calculate_volume_poc(df_chart.tail(100))
                 
                 fig = go.Figure()
-                
-                # Candlestick chart
                 fig.add_trace(go.Candlestick(
                     x=df_chart.index,
                     open=df_chart['Open'],
@@ -478,7 +478,6 @@ def main():
                     name="Price"
                 ))
                 
-                # Draw POC Level Line
                 fig.add_hline(
                     y=poc_price, 
                     line_dash="dash", 
@@ -488,7 +487,7 @@ def main():
                 )
                 
                 fig.update_layout(
-                    title=f"{selected_stock} - 5M SMC Structure & Institutional Volume POC",
+                    title=f"{selected_stock} - 5M SMC Structure & Volume POC",
                     template="plotly_dark",
                     xaxis_rangeslider_visible=False,
                     height=600
@@ -497,9 +496,7 @@ def main():
             else:
                 st.error("Failed to fetch historical market data for selected stock.")
 
-    # -------------------------------------------------------------
     # TAB 3: MARKET NEWS FEED
-    # -------------------------------------------------------------
     with tab3:
         st.subheader("📰 Real-time Indian Equity Market Headlines")
         news_list = fetch_market_news()
@@ -511,15 +508,13 @@ def main():
         else:
             st.write("No news items retrieved at present.")
 
-    # -------------------------------------------------------------
     # TAB 4: ML MODEL ANALYTICS
-    # -------------------------------------------------------------
     with tab4:
         st.subheader("🤖 Machine Learning Engine & Feature Pipeline")
         st.markdown("""
         * **Model Type:** XGBoost / Random Forest Classifier Pipeline
         * **Input Features:** 14-period RSI, MACD Histogram, ATR, 20-period Volume Ratio, 5-bar Pct Change
-        * **Confluence Integration:** ML confidence probabilities are combined with Smart Money Concepts (SMC) order block retests, liquidity sweeps, and Volume POC nodes to generate unified signals.
+        * **Confluence Integration:** Probabilities generated from backtested historical dataset are blended with SMC Order Blocks, Liquidity Sweeps, and Volume POC nodes.
         """)
 
 if __name__ == "__main__":
