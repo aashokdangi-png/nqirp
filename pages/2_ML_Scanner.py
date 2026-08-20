@@ -11,6 +11,23 @@ import pandas as pd
 import numpy as np
 import yfinance as yf
 import plotly.graph_objects as go
+# --- UPSTOX CLIENT RECOVERY / INITIALIZATION SAFETY NET ---
+if "upstox_client" not in st.session_state or not st.session_state.get("upstox_client"):
+    st.sidebar.warning("⚠️ Upstox client missing from session.")
+    
+    # Optional: If you use a token file, environment variable, or manual input, 
+    # you can re-initialize your Upstox client right here so Page 2 works independently!
+    with st.sidebar.expander("🔑 Initialize Upstox Here"):
+        token_input = st.text_input("Enter Upstox Access Token (if needed):", type="password")
+        if st.button("Connect Upstox"):
+            try:
+                # Import your upstox client class here if needed, e.g.:
+                # from upstox_client_wrapper import UpstoxClient
+                # st.session_state["upstox_client"] = UpstoxClient(token_input)
+                st.success("Connected successfully! Refresh page.")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Failed to initialize: {e}")
 
 # --- PAGE CONFIGURATION ---
 st.set_page_config(
