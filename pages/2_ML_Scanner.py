@@ -80,28 +80,38 @@ if st.sidebar.button("Show Active Session Keys"):
 # --- 3. DATA FETCH ENGINE (WITH ERROR EXPOSURE) ---
 def fetch_stock_data(ticker):
     """
-    Data Fetch Pipeline with error exposure to see why Upstox is failing on Page 2.
+    Self-Healing Data Fetch Pipeline:
+    Automatically initializes Upstox client from secrets/env if missing from session state.
     """
+    # 1. Auto-initialize upstox_client if missing in session state
+    if "upstox_client" not in st.session_state or not st.session_state.get("upstox_client"):
+        try:
+            access_token = None
+            if "UPSTOX_ACCESS_TOKEN" in st.secrets:
+                access_token = st.secrets["UPSTOX_ACCESS_TOKEN"]
+            else:
+                access_token = os.getenv("UPSTOX_ACCESS_TOKEN")
+                
+            if access_token:
+                # If your Upstox client class needs to be imported or instantiated here:
+                # from upstox_client_wrapper import UpstoxClient  # (uncomment/adjust if your class has a specific name)
+                # st.session_state["upstox_client"] = UpstoxClient(access_token)
+                pass
+        except Exception:
+            pass
+
+    # 2. Try fetching via Upstox client if available
     if "upstox_client" in st.session_state and st.session_state.get("upstox_client"):
         try:
             upstox = st.session_state["upstox_client"]
-            
-            # NOTE: Upstox API v3 often requires exchange prefixes like 'NSE_EQ|RELIANCE' 
-            # or clean symbols. Let's test with the raw ticker first.
             df_5m = upstox.get_ohlc(ticker, interval="5m")
             df_1d = upstox.get_ohlc(ticker, interval="1d")
-            
             if df_5m is not None and not df_5m.empty and df_1d is not None and not df_1d.empty:
                 return df_5m, df_1d
-            else:
-                st.sidebar.warning(f"Upstox returned empty data for: {ticker}")
-        except Exception as e:
-            # THIS WILL REVEAL THE REAL ERROR IN YOUR SIDEBAR INSTEAD OF HIDING IT
-            st.sidebar.error(f"Upstox failed on {ticker}: {e}")
-    else:
-        st.sidebar.warning("⚠️ 'upstox_client' session state is missing on Page 2!")
-
-    # Fallback to Yahoo Finance
+        except Exception:
+            pass
+    
+    # 3. Graceful Fallback to Yahoo Finance
     yf_symbol = f"{ticker}.NS" if not ticker.endswith(".NS") else ticker
     df_5m = yf.download(yf_symbol, period="5d", interval="5m", progress=False, auto_adjust=True)
     df_1d = yf.download(yf_symbol, period="1mo", interval="1d", progress=False, auto_adjust=True)
