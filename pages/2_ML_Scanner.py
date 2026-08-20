@@ -91,19 +91,41 @@ SECTOR_CONSTITUENTS = {
 }
 
 @st.cache_data(ttl=300)
-def fetch_market_data_and_flow():
+def fetch_market_data_and_flow(has_upstox):
     index_tickers = ["^NSEI", "^NSEMDCP50", "NIFTYSMALL100.NS", "^CNXSC", "^CNXSMLCAP"]
     sector_tickers = list(set(SECTOR_MAP.values()))
     fallback_tickers = [t for lst in SECTOR_CONSTITUENTS.values() for t in lst]
     
     all_tickers = list(set(index_tickers + sector_tickers + fallback_tickers))
     trends, returns = {}, {}
-    try:
-        data = yf.download(all_tickers, period="5d", interval="1d", progress=False)
-        close_df = data["Close"] if "Close" in data else data
+    close_df = None
 
+    # Try fetching via Upstox session client first if available
+    if has_upstox and "upstox_client" in st.session_state:
+        try:
+            upstox = st.session_state["upstox_client"]
+            price_dict = {}
+            for t in all_tickers:
+                clean_t = t.replace("^", "").replace(".NS", "")
+                df_1d = upstox.get_ohlc(clean_t, interval="1d")
+                if df_1d is not None and not df_1d.empty:
+                    price_dict[t] = df_1d["Close"]
+            if price_dict:
+                close_df = pd.DataFrame(price_dict)
+        except Exception:
+            pass
+
+    # Fallback to yfinance if Upstox isn't connected or failed
+    if close_df is None or close_df.empty:
+        try:
+            data = yf.download(all_tickers, period="5d", interval="1d", progress=False, auto_adjust=True)
+            close_df = data["Close"] if isinstance(data, pd.DataFrame) and "Close" in data else data
+        except Exception:
+            pass
+
+    try:
         def get_1d_return(t_sym):
-            if t_sym in close_df:
+            if close_df is not None and t_sym in close_df:
                 s = close_df[t_sym].dropna()
                 if len(s) >= 2: 
                     ret = float((s.iloc[-1] - s.iloc[-2]) / s.iloc[-2])
@@ -149,7 +171,8 @@ def fetch_market_data_and_flow():
         
     return trends, returns, fii_dii_flow
 
-idx_trends, market_returns, inst_flow = fetch_market_data_and_flow()
+has_upstox_active = "upstox_client" in st.session_state and st.session_state.get("upstox_client") is not None
+idx_trends, market_returns, inst_flow = fetch_market_data_and_flow(has_upstox_active)
 
 # Top Index & FII/DII Metrics Bar
 col1, col2, col3, col4 = st.columns(4)
