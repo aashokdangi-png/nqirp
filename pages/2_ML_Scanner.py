@@ -11,23 +11,7 @@ import pandas as pd
 import numpy as np
 import yfinance as yf
 import plotly.graph_objects as go
-# --- UPSTOX CLIENT RECOVERY / INITIALIZATION SAFETY NET ---
-if "upstox_client" not in st.session_state or not st.session_state.get("upstox_client"):
-    st.sidebar.warning("⚠️ Upstox client missing from session.")
-    
-    # Optional: If you use a token file, environment variable, or manual input, 
-    # you can re-initialize your Upstox client right here so Page 2 works independently!
-    with st.sidebar.expander("🔑 Initialize Upstox Here"):
-        token_input = st.text_input("Enter Upstox Access Token (if needed):", type="password")
-        if st.button("Connect Upstox"):
-            try:
-                # Import your upstox client class here if needed, e.g.:
-                # from upstox_client_wrapper import UpstoxClient
-                # st.session_state["upstox_client"] = UpstoxClient(token_input)
-                st.success("Connected successfully! Refresh page.")
-                st.rerun()
-            except Exception as e:
-                st.error(f"Failed to initialize: {e}")
+import requests
 
 # --- PAGE CONFIGURATION ---
 st.set_page_config(
@@ -63,56 +47,107 @@ active_sectors = st.sidebar.multiselect(
 )
 
 min_rr_threshold = st.sidebar.slider("Minimum Risk-to-Reward (R:R) Filter", 1.0, 4.0, 1.2, 0.1)
-st.sidebar.markdown("---")
-st.sidebar.markdown("### 🔌 Active Data Pipe Status")
-current_source = st.session_state.get("active_data_source", "⏳ Not Scanned Yet")
-st.sidebar.write(f"**Source:** {current_source}")
 
-if "Yahoo Finance" in current_source and "upstox_error_log" in st.session_state:
-    with st.sidebar.expander("View Upstox Error Log"):
-        st.write(st.session_state["upstox_error_log"])
-st.sidebar.markdown("---")
-st.sidebar.markdown("### 🛠️ Session State Inspector")
-if st.sidebar.button("Show Active Session Keys"):
-    st.sidebar.write("Keys available:", list(st.session_state.keys()))
-    for k, v in st.session_state.items():
-        st.sidebar.write(f"- **{k}**: {type(v)}")        
-# --- 3. DATA FETCH ENGINE (UPSTOX VIA SESSION STATE WITH YFINANCE FALLBACK) ---
+# --- 3. UPSTOX API & DATA FETCH ENGINE ---
+UPSTOX_ISIN_MAP = {
+    "RELIANCE": "NSE_EQ|INE002A01018",
+    "TCS": "NSE_EQ|INE467B01029",
+    "HDFCBANK": "NSE_EQ|INE040A01034",
+    "INFY": "NSE_EQ|INE009A01021",
+    "ICICIBANK": "NSE_EQ|INE090A01021",
+    "SBIN": "NSE_EQ|INE062A01020",
+    "BHARTIARTL": "NSE_EQ|INE397D01024",
+    "ITC": "NSE_EQ|INE154A01025",
+    "LTIM": "NSE_EQ|INE214T01019",
+    "AXISBANK": "NSE_EQ|INE238A01034",
+    "KOTAKBANK": "NSE_EQ|INE237A01028",
+    "LT": "NSE_EQ|INE018A01030",
+    "HINDUNILVR": "NSE_EQ|INE030A01027",
+    "BAJFINANCE": "NSE_EQ|INE296A01024",
+    "MARUTI": "NSE_EQ|INE585B01010",
+    "TATAMOTORS": "NSE_EQ|INE155A01022",
+    "TATASTEEL": "NSE_EQ|INE081A01020",
+    "NTPC": "NSE_EQ|INE733E01010",
+    "M&M": "NSE_EQ|INE101A01026",
+    "TATAPOWER": "NSE_EQ|INE245A01021",
+    "FEDERALBNK": "NSE_EQ|INE171A01029",
+    "POLYCAB": "NSE_EQ|INE455K01017",
+    "PERSISTENT": "NSE_EQ|INE262H01021",
+    "COFORGE": "NSE_EQ|INE591G01017",
+    "ASHOKLEY": "NSE_EQ|INE208A01029",
+    "MAXHEALTH": "NSE_EQ|INE275H01029",
+    "VOLTAS": "NSE_EQ|INE226A01021",
+    "CDSL": "NSE_EQ|INE736A01011",
+    "ANGELONE": "NSE_EQ|INE732I01013",
+    "KFINTECH": "NSE_EQ|INE138Y01010",
+    "SUZLON": "NSE_EQ|INE040H01021",
+    "BSOFT": "NSE_EQ|INE836A01035",
+    "HFCL": "NSE_EQ|INE548A01028",
+    "IEX": "NSE_EQ|INE022Q01020",
+    "KEI": "NSE_EQ|INE878B01027"
+}
+
+def get_upstox_access_token():
+    try:
+        return st.secrets.get("UPSTOX_ACCESS_TOKEN") or os.getenv("UPSTOX_ACCESS_TOKEN")
+    except Exception:
+        return os.getenv("UPSTOX_ACCESS_TOKEN")
+
+def fetch_upstox_live(ticker: str, interval: str = "5m") -> pd.DataFrame:
+    try:
+        token = get_upstox_access_token()
+        if not token:
+            return None
+
+        clean_ticker = ticker.replace(".NS", "").upper()
+        instrument_key = UPSTOX_ISIN_MAP.get(clean_ticker)
+        if not instrument_key:
+            instrument_key = f"NSE_EQ|INE{clean_ticker}"
+
+        interval_map = {"5m": "5minute", "1d": "day", "1h": "1hour"}
+        upstox_interval = interval_map.get(interval, "5minute")
+
+        url = f"https://api.upstox.com/v3/historical-candle/{instrument_key}/{upstox_interval}"
+        headers = {
+            "Accept": "application/json",
+            "Authorization": f"Bearer {token}"
+        }
+
+        res = requests.get(url, headers=headers, timeout=6)
+        if res.status_code == 200:
+            data = res.json().get("data", {}).get("candles", [])
+            if not data:
+                return None
+            df = pd.DataFrame(data, columns=["Timestamp", "Open", "High", "Low", "Close", "Volume", "OI"])
+            df["Timestamp"] = pd.to_datetime(df["Timestamp"])
+            df.set_index("Timestamp", inplace=True)
+            df.sort_index(inplace=True)
+            for col in ["Open", "High", "Low", "Close", "Volume"]:
+                df[col] = pd.to_numeric(df[col], errors="coerce")
+            return df
+    except Exception:
+        pass
+    return None
+
 def fetch_stock_data(ticker):
     """
     Data Fetch Pipeline:
-    Maintains exact original session state structure with an automatic recovery fallback
-    if Page 1 failed to initialize the client.
+    Primary Attempt -> Upstox API v3
+    Fallback Attempt -> Yahoo Finance (yfinance)
     """
-    # Self-Recovery: If session state client was lost or never initialized by Page 1, 
-    # re-establish it safely so the rest of your code works identically.
-    if "upstox_client" not in st.session_state or not st.session_state.get("upstox_client"):
-        try:
-            # Check if you have an initialization wrapper or token available in secrets/env
-            token = st.secrets.get("UPSTOX_ACCESS_TOKEN") or os.getenv("UPSTOX_ACCESS_TOKEN")
-            if token:
-                # If your client initialization requires a specific class import, 
-                # ensure it populates st.session_state["upstox_client"] here just like Page 1 used to do.
-                pass
-        except Exception:
-            pass
-
-    # Original Session State Pipeline
-    if "upstox_client" in st.session_state and st.session_state.get("upstox_client"):
-        try:
-            upstox = st.session_state["upstox_client"]
-            df_5m = upstox.get_ohlc(ticker, interval="5m")
-            df_1d = upstox.get_ohlc(ticker, interval="1d")
-            if df_5m is not None and not df_5m.empty and df_1d is not None and not df_1d.empty:
-                return df_5m, df_1d
-        except Exception:
-            pass
+    try:
+        df_5m = fetch_upstox_live(ticker, interval="5m")
+        df_1d = fetch_upstox_live(ticker, interval="1d")
+        if df_5m is not None and not df_5m.empty and df_1d is not None and not df_1d.empty:
+            return df_5m, df_1d
+    except Exception:
+        pass
     
-    # Fallback to Yahoo Finance
     yf_symbol = f"{ticker}.NS" if not ticker.endswith(".NS") else ticker
     df_5m = yf.download(yf_symbol, period="5d", interval="5m", progress=False, auto_adjust=True)
     df_1d = yf.download(yf_symbol, period="1mo", interval="1d", progress=False, auto_adjust=True)
     return df_5m, df_1d
+
 # --- 4. MARKET SENTIMENT & FII / DII NET ORDER FLOW ENGINE ---
 SECTOR_MAP = {
     "Banking": "^NSEBANK", "IT": "^CNXIT", "Auto": "^CNXAUTO",
@@ -178,7 +213,6 @@ def fetch_market_data_and_flow():
                 r = get_group_avg_return(SECTOR_CONSTITUENTS[sector_name])
             returns[f"Sector_{sector_name}"] = r
 
-        # Scaled FII/DII Net Flow proxy in ₹ Crores
         nifty_ret = returns["Nifty_1D_Return"]
         fii_proxy = nifty_ret * 450000 
         dii_proxy = -fii_proxy * 0.40  
@@ -195,7 +229,6 @@ def fetch_market_data_and_flow():
 
 idx_trends, market_returns, inst_flow = fetch_market_data_and_flow()
 
-# Top Index & FII/DII Metrics Bar
 col1, col2, col3, col4 = st.columns(4)
 col1.metric("Nifty 50 (Sentiment)", idx_trends.get("^NSEI", "Active"))
 col2.metric("Nifty Midcap", idx_trends.get("^NSEMDCP50", "Active"))
@@ -207,7 +240,6 @@ col4.metric(
     delta_color="normal" if inst_flow["Net_Flow"] >= 0 else "inverse"
 )
 
-# Sectoral Performance Metric Grid
 st.markdown("**🌐 Sectoral Performance (Live Impact)**")
 sec_cols = st.columns(6)
 for idx, sec in enumerate(["Banking", "IT", "Auto", "Energy", "FMCG", "Metal"]):
@@ -326,7 +358,6 @@ def detect_synchronized_smc(df_5m):
         c_high, c_low = float(df['High'].iloc[i]), float(df['Low'].iloc[i])
         atr = float(df['ATR'].iloc[i]) if not np.isnan(df['ATR'].iloc[i]) else (c_high - c_low)
         
-        # Bullish Order Block
         if c_close < c_open:
             next_close = float(df['Close'].iloc[i+1])
             displacement = next_close - c_open
@@ -350,7 +381,6 @@ def detect_synchronized_smc(df_5m):
                         'start_time': candle_time, 'state': state, 'state_val': state_val, 'bias': 'BUY'
                     })
 
-        # Bearish Order Block
         if c_close > c_open:
             next_close = float(df['Close'].iloc[i+1])
             displacement = c_open - next_close
@@ -374,7 +404,6 @@ def detect_synchronized_smc(df_5m):
                         'start_time': candle_time, 'state': state, 'state_val': state_val, 'bias': 'SELL'
                     })
 
-    # Liquidity Sweeps
     recent_swings_low = df['Low'].iloc[-30:-3].min()
     recent_swings_high = df['High'].iloc[-30:-3].max()
     curr_low, curr_high = float(df['Low'].iloc[-1]), float(df['High'].iloc[-1])
