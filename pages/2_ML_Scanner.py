@@ -12,6 +12,7 @@ import pandas as pd
 import numpy as np
 import yfinance as yf
 import plotly.graph_objects as go
+import concurrent.futures # Added for lightning-fast concurrent scanning
 
 # --- PAGE CONFIGURATION ---
 st.set_page_config(
@@ -644,7 +645,7 @@ def calculate_dynamic_risk_levels(df_5m, df_1d, trade_bias, last_price, best_zon
         
     return float(sl_price), float(tgt_price)
 
-# --- 10. CORE SCANNER & CONFLUENCE MATRIX ---
+# --- 10. CORE SCANNER & CONFLUENCE MATRIX (ACCELERATED MULTITHREADING) ---
 ctrl_col1, ctrl_col2 = st.columns([1, 3])
 with ctrl_col1:
     scan_universe = st.selectbox("Select Scanning Universe", ["All Combined (100 Stocks)", "Nifty 50", "Nifty Midcap", "Nifty Smallcap"])
@@ -666,14 +667,12 @@ if run_scan:
     progress_bar = st.progress(0)
     status_text = st.empty()
 
-    for idx, ticker in enumerate(tickers):
-        status_text.text(f"Scanning ({idx+1}/{len(tickers)}) Block Orders & SMC Context for {ticker}...")
-        progress_bar.progress((idx + 1) / len(tickers))
-        
+    # Encapsulated the identical logic into a function to allow for concurrent execution
+    def process_single_ticker(ticker):
         try:
             df_5m, df_1d = fetch_stock_data(ticker)
             if df_5m is None or df_5m.empty or df_1d is None or df_1d.empty:
-                continue
+                return None
 
             if isinstance(df_5m.columns, pd.MultiIndex):
                 df_5m.columns = df_5m.columns.get_level_values(0)
@@ -691,7 +690,6 @@ if run_scan:
             avg_vol = float(vol_5m.tail(20).mean())
             rvol = float(vol_5m.iloc[-1] / (avg_vol + 1e-5))
 
-            # Advanced Order Flow & Reversal Diagnostics
             of_diag = detect_block_orders_and_reversals(df_5m)
             poc_price = of_diag["poc_price"]
 
@@ -728,7 +726,6 @@ if run_scan:
 
             score += news_score
 
-            # Dynamic Risk Calculation
             sl_price, tgt_price = calculate_dynamic_risk_levels(df_5m, df_1d, trade_bias, last_price, best_zone, poc_price, atr_14)
 
             risk_pct = abs((last_price - sl_price) / last_price) * 100
@@ -736,12 +733,11 @@ if run_scan:
             rr_ratio = reward_pct / (risk_pct + 1e-5)
 
             if rr_ratio < min_rr_threshold:
-                continue
+                return None
 
-            # State summary for table
             state_str = best_zone['state'] if best_zone else ("⚡ REVERSAL SIGNAL" if of_diag["reversal_detected"] else "NO ACTIVE SMC ZONE")
 
-            results.append({
+            return {
                 "Stock": f"🏛️ {ticker}" if news_score != 0 else ticker,
                 "Ticker_Raw": ticker,
                 "Index": meta["index"],
@@ -759,10 +755,25 @@ if run_scan:
                 "R:R": f"1:{rr_ratio:.2f}",
                 "Confluence Score": round(score, 1),
                 "News / Catalysts": news_context
-            })
-
+            }
         except Exception:
-            continue
+            return None
+
+    # Threading Execution (Fires up to 20 concurrent API requests to speed up scanning)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=20) as executor:
+        future_to_ticker = {executor.submit(process_single_ticker, ticker): ticker for ticker in tickers}
+        
+        for idx, future in enumerate(concurrent.futures.as_completed(future_to_ticker)):
+            ticker = future_to_ticker[future]
+            status_text.text(f"Fast-Scanning ({idx+1}/{len(tickers)}) Block Orders & SMC Context... ({ticker})")
+            progress_bar.progress((idx + 1) / len(tickers))
+            
+            try:
+                res = future.result()
+                if res is not None:
+                    results.append(res)
+            except Exception:
+                pass
 
     status_text.empty()
     progress_bar.empty()
